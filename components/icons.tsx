@@ -155,3 +155,72 @@ export function IconCeiling(props: IconProps) {
     </Svg>
   )
 }
+
+/** Partial selection: one rule, struck across. Never a shrunken tick. */
+export function IconMinus(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 8h10" />
+    </Svg>
+  )
+}
+
+/** Delete: a record struck out of the book. Soft — the rule, not a fire. */
+export function IconStrike(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3.5 2.5h9v11h-9z" />
+      <path d="M5.5 8h5" />
+    </Svg>
+  )
+}
+
+/** Undo: back the way it came. */
+export function IconUndo(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 8A5.5 5.5 0 1 0 4.4 3.8" />
+      <path d="M2.5 1.5v3h3" />
+    </Svg>
+  )
+}
+
+/** Filter: a field narrowed, rule by rule. */
+export function IconFilter(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 3.5h12" />
+      <path d="M4.5 8h7" />
+      <path d="M6.5 12.5h3" />
+    </Svg>
+  )
+}
+
+/** A saved view: a page marked so you can get back to it. */
+export function IconMark(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 2.5h8v11l-4-3.5-4 3.5z" />
+    </Svg>
+  )
+}
+
+/** More: the actions that did not fit. */
+export function IconMore(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3 8h.01" />
+      <path d="M8 8h.01" />
+      <path d="M13 8h.01" />
+    </Svg>
+  )
+}
+
+/** The audit, mid-flight. Paired with a pulse, never spun. */
+export function IconPulse(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M1.5 8h3l2-4.5 3 9 2-4.5h3" />
+    </Svg>
+  )
+}

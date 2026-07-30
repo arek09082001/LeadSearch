@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 
+import type { SaveResultItem } from '@/lib/leads/types'
 import type { BudgetState, SearchEvent, SearchInput, SearchRow } from '@/lib/search/types'
 
 /*
@@ -31,11 +32,14 @@ export interface SearchStreamState {
   estimateUsd: number | null
   estimateLabel: string | null
   resolvedAddress: string | null
+  /** Recorded on the lead as where it was discovered, when it is saved. */
+  searchId: string | null
 }
 
 const INITIAL: SearchStreamState = {
   status: 'idle',
   rows: [],
+  searchId: null,
   searchCostUsd: 0,
   requests: 0,
   budget: null,
@@ -122,7 +126,36 @@ export function useSearchStream(initialBudget: BudgetState) {
     setState((prev) => ({ ...prev, budget }))
   }, [])
 
-  return { state, run, cancel, setBudget }
+  /*
+   * Repaint the `In book` marks after a save, without re-running the search.
+   *
+   * The alternative — refetching to learn what we just wrote — would cost money
+   * on a surface whose entire design is about not spending it. The save route
+   * already told us every lead id it created, so the table has everything it
+   * needs to be correct.
+   */
+  const markSaved = useCallback((items: SaveResultItem[]) => {
+    const byPlace = new Map(items.filter((item) => item.leadId).map((item) => [item.googlePlaceId, item]))
+    if (!byPlace.size) return
+
+    setState((prev) => ({
+      ...prev,
+      rows: prev.rows.map((row) => {
+        const item = byPlace.get(row.providerPlaceId)
+        if (!item) return row
+        return {
+          ...row,
+          savedLeadId: item.leadId,
+          // A freshly saved lead is `new`; a refreshed one keeps the status it
+          // already had, which this side does not know — so it says nothing
+          // rather than guessing, and the library remains the source of truth.
+          savedStatus: item.outcome === 'saved' ? 'new' : row.savedStatus,
+        }
+      }),
+    }))
+  }, [])
+
+  return { state, run, cancel, setBudget, markSaved }
 }
 
 function reduce(state: SearchStreamState, event: SearchEvent): SearchStreamState {
@@ -130,6 +163,7 @@ function reduce(state: SearchStreamState, event: SearchEvent): SearchStreamState
     case 'meta':
       return {
         ...state,
+        searchId: event.searchId,
         budget: event.budget,
         cachedAt: event.cached ? (event.cachedAt ?? null) : null,
         estimateUsd: event.estimate.maxCostUsd,
