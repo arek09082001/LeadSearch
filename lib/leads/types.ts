@@ -4,6 +4,7 @@ import {
   type FindingCode,
   type FindingSeverity,
 } from '@/lib/enrichment/vocabulary'
+import type { StoredScore } from '@/lib/scoring/score'
 
 /*
  * The library's vocabulary, in one place that both halves may import.
@@ -380,4 +381,13 @@ export interface LeadDetail {
   audit: LeadAudit | null
   /** Every audit before it, newest first. History is the point of re-running. */
   history: AuditSummary[]
+  /**
+   * The score on the lead, with the arithmetic that produced it.
+   *
+   * The same row `leads.current_score` was denormalised from, so the number in
+   * the book and the reasoning on this page cannot disagree. Null when nothing
+   * has scored the lead yet — which is not the same as a score of null, and the
+   * breakdown inside says which.
+   */
+  score: StoredScore | null
 }

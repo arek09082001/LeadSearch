@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { errorResponse, requireSession } from '@/lib/api/guard'
 import { countPending, runEnrichment } from '@/lib/enrichment/run'
 import { queueEnrichment } from '@/lib/leads/repository'
+import { runScoring } from '@/lib/scoring/run'
 
 /*
  * The audit queue, as a surface.
@@ -51,7 +52,29 @@ export async function POST(request: Request) {
 
     const queued = ids.length ? await queueEnrichment(ids) : 0
 
-    after(() => runEnrichment(ids.length ? ids : null))
+    /*
+     * Scoring rides along after the audit pass, in the same background work.
+     *
+     * After, not beside: a score is computed from findings that have to exist
+     * first, and the pass this just ran is what writes them. Chaining it here
+     * rather than inside the pipeline keeps the two separable — the enrichment
+     * pass still knows nothing about ranking, and scoring stays a pure function
+     * of rows already written.
+     *
+     * It costs nothing to add. There is no network under `runScoring`, and the
+     * queue it drains is empty in the steady state, so the poll that keeps the
+     * audit queue moving now also ranks whatever that queue finished.
+     *
+     * Deliberately NOT narrowed to `ids`, even when the caller named some. The
+     * leads just audited are still waiting on PageSpeed and cannot be scored
+     * yet — their findings are half-written — so narrowing would score nothing
+     * and leave the ones that DID settle since the last poll unranked. The
+     * whole queue is the right work list, and it is empty most of the time.
+     */
+    after(async () => {
+      await runEnrichment(ids.length ? ids : null)
+      await runScoring()
+    })
 
     return Response.json({ queued, pending: await countPending() })
   } catch (error) {

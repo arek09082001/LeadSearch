@@ -2,6 +2,7 @@ import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
 import { ReAudit } from '@/components/leads/re-audit'
+import { ScoreBreakdown } from '@/components/leads/score-breakdown'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
@@ -219,7 +220,7 @@ function Measurements({ audit }: { audit: LeadAudit }) {
  * ------------------------------------------------------------------------- */
 
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history } = detail
+  const { lead, audit, history, score } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -330,6 +331,14 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
         </section>
 
         <aside className="min-w-0 border-t border-rule lg:border-l lg:border-t-0">
+          {/*
+            The score sits above the measurements, at the top of the column the
+            eye lands in after the diagnosis. It is the answer to "is this worth
+            a call", and the faults to its left are the argument for it — so the
+            two read as one thing, and neither is buried under the notebook.
+          */}
+          <ScoreBreakdown score={score} />
+
           {audit ? (
             <>
               <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-ghost">
