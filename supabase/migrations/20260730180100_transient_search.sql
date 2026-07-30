@@ -69,7 +69,7 @@ create table public.search_results (
   raw               jsonb,                       -- full Place payload as returned
 
   fetched_at        timestamptz not null default now(),
-  expires_at        timestamptz not null default (now() + interval '7 days'),
+  expires_at        timestamptz not null default (now() + interval '30 days'),
 
   constraint search_results_unique_place_per_search
     unique (search_id, google_place_id),
@@ -82,7 +82,7 @@ create table public.search_results (
 comment on table public.search_results is
   'Volatile Google Places data with a hard expiry. A row here is a candidate, not a lead; the cleanup job deletes it and nothing is lost.';
 comment on column public.search_results.expires_at is
-  'Enforced by the scheduled cleanup job, not by Postgres. Default window: 7 days.';
+  'Enforced by the scheduled cleanup job, not by Postgres. Default window: 30 days, the outer edge of Google''s caching guidance.';
 
 create index search_results_search_id_position_idx
   on public.search_results (search_id, position);

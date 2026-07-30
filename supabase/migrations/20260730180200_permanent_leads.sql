@@ -80,28 +80,53 @@ create trigger leads_set_updated_at
 -- lead_audits — one row per website audit run. History is the point: it is how
 -- you see that someone finally fixed their site.
 --
--- The header holds only what is certain. The criteria themselves live in
--- lead_audit_findings as data, because PRODUCT.md marks them undecided.
+-- Hybrid model, and the rule that keeps the two halves from drifting:
+--
+--   COLUMNS here hold MEASUREMENTS  — what was observed, no judgement implied.
+--   FINDINGS hold JUDGEMENTS        — whether something is a problem, how bad.
+--
+-- The two do not overlap, so there is nothing to keep in sync. The six columns
+-- below are the signals worth sorting and filtering a thousand-row library on;
+-- they are facts about a page, not criteria, so committing to them does not
+-- pre-empt the weighting decision PRODUCT.md leaves open. Everything else that
+-- a checker learns goes to lead_audit_findings, where new checks cost no
+-- migration. All six are nullable: they are unknown unless the site answered.
 -- ---------------------------------------------------------------------------
 create table public.lead_audits (
-  id              uuid        primary key default gen_random_uuid(),
-  lead_id         uuid        not null references public.leads (id) on delete cascade,
+  id                 uuid        primary key default gen_random_uuid(),
+  lead_id            uuid        not null references public.leads (id) on delete cascade,
 
-  audited_at      timestamptz not null default now(),
-  checker_version text        not null,           -- which auditor produced this
-  website_url     text,                           -- the URL actually audited
-  final_url       text,                           -- after redirects
-  website_status  public.website_status not null,
-  http_status     smallint,
-  duration_ms     integer,
-  error           text,                           -- set when website_status = 'error'
-  raw             jsonb,                          -- full checker output
+  audited_at         timestamptz not null default now(),
+  checker_version    text        not null,        -- which auditor produced this
+  website_url        text,                        -- the URL actually audited
+  final_url          text,                        -- after redirects
+  website_status     public.website_status not null,
+  http_status        smallint,
+  duration_ms        integer,                     -- how long the audit itself took
+  error              text,                        -- set when website_status = 'error'
 
-  created_at      timestamptz not null default now()
+  -- ---- measured signals ---------------------------------------------------
+  is_https             boolean,                   -- final_url served over TLS
+  is_mobile_friendly   boolean,                   -- responsive viewport declared
+  has_meta_description boolean,
+  load_ms              integer,                   -- page load time, sortable
+  copyright_year       smallint,                  -- footer year; the abandonment tell
+  platform             text,                      -- detected CMS: wordpress, wix, none…
+
+  raw                jsonb,                       -- full checker output
+
+  created_at         timestamptz not null default now(),
+
+  constraint lead_audits_copyright_year_plausible
+    check (copyright_year is null or (copyright_year between 1990 and 2100)),
+  constraint lead_audits_load_ms_non_negative
+    check (load_ms is null or load_ms >= 0)
 );
 
 comment on table public.lead_audits is
   'Append-only audit history. checker_version keeps an old audit explainable after the auditor changes.';
+comment on column public.lead_audits.platform is
+  'Free text, not an enum: the set of detectable platforms grows with the checker.';
 
 create index lead_audits_lead_id_audited_at_idx
   on public.lead_audits (lead_id, audited_at desc);
@@ -109,12 +134,15 @@ create index lead_audits_website_status_idx
   on public.lead_audits (website_status);
 
 -- ---------------------------------------------------------------------------
--- lead_audit_findings — structured, filterable findings. Not a text blob.
+-- lead_audit_findings — structured, filterable judgements. Not a text blob.
 --
--- `code` is text, not an enum: the check vocabulary is open, and adding a check
--- must not require a migration. Filtering leads by finding is
+-- The open half of the hybrid. `code` is text, not an enum: the check
+-- vocabulary is undecided, and adding a check must not require a migration.
+-- Filtering leads by finding is
 --   join lead_audit_findings f on f.audit_id = leads.latest_audit_id
 --   where f.code = '...' and not f.passed
+-- while filtering on a measured signal reads straight off lead_audits. Neither
+-- duplicates the other.
 -- ---------------------------------------------------------------------------
 create table public.lead_audit_findings (
   id        bigint generated always as identity primary key,
@@ -132,7 +160,7 @@ create table public.lead_audit_findings (
 );
 
 comment on table public.lead_audit_findings is
-  'One row per check per audit. Findings are data, so new criteria need no schema change.';
+  'One row per judgement per audit. Findings are data, so new criteria need no schema change. Measured signals live on lead_audits instead.';
 
 create index lead_audit_findings_audit_id_idx on public.lead_audit_findings (audit_id);
 create index lead_audit_findings_code_idx     on public.lead_audit_findings (code);
