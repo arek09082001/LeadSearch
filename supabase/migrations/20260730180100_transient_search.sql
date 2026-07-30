@@ -51,7 +51,7 @@ create table public.search_results (
   search_id         uuid        not null references public.searches (id) on delete cascade,
 
   google_place_id   text        not null,        -- the one field Google lets us keep
-  position          integer,                     -- rank within the result set
+  result_rank       integer,                     -- position within the result set
 
   -- volatile Google fields, valid only as of fetched_at
   name              text,
@@ -84,8 +84,8 @@ comment on table public.search_results is
 comment on column public.search_results.expires_at is
   'Enforced by the scheduled cleanup job, not by Postgres. Default window: 30 days, the outer edge of Google''s caching guidance.';
 
-create index search_results_search_id_position_idx
-  on public.search_results (search_id, position);
+create index search_results_search_id_rank_idx
+  on public.search_results (search_id, result_rank);
 create index search_results_expires_at_idx
   on public.search_results (expires_at);
 create index search_results_google_place_id_idx

@@ -69,8 +69,9 @@ create index leads_city_idx             on public.leads (city);
 -- Partial: the Outreach queue only ever asks for leads that have a date set.
 create index leads_follow_up_at_idx     on public.leads (follow_up_at)
   where follow_up_at is not null;
--- Fuzzy search-within-leads.
-create index leads_name_trgm_idx        on public.leads using gin (name gin_trgm_ops);
+-- Fuzzy search-within-leads. The operator class is schema-qualified because
+-- pg_trgm lives in `extensions`, which is not on every role's search_path.
+create index leads_name_trgm_idx        on public.leads using gin (name extensions.gin_trgm_ops);
 
 create trigger leads_set_updated_at
   before update on public.leads
@@ -152,7 +153,7 @@ create table public.lead_audit_findings (
   category  text,                                 -- e.g. 'seo', 'mobile', 'trust'
   severity  public.audit_severity not null default 'info',
   passed    boolean not null,
-  value     jsonb,                                -- measured evidence, e.g. {"lcp_ms": 4200}
+  value     jsonb,                                -- supporting evidence, e.g. {"tags_missing": ["h1"]}
   message   text,                                 -- one-line human summary for the UI
 
   constraint lead_audit_findings_unique_code_per_audit
@@ -162,8 +163,9 @@ create table public.lead_audit_findings (
 comment on table public.lead_audit_findings is
   'One row per judgement per audit. Findings are data, so new criteria need no schema change. Measured signals live on lead_audits instead.';
 
-create index lead_audit_findings_audit_id_idx on public.lead_audit_findings (audit_id);
-create index lead_audit_findings_code_idx     on public.lead_audit_findings (code);
+-- No standalone audit_id index: the unique constraint above already indexes
+-- (audit_id, code) and serves lookups by audit on its own.
+create index lead_audit_findings_code_idx on public.lead_audit_findings (code);
 -- The only question the leads list asks: which checks did this site FAIL?
 create index lead_audit_findings_failed_idx
   on public.lead_audit_findings (code, severity)

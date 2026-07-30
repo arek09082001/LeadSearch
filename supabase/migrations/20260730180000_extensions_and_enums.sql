@@ -9,7 +9,9 @@
 
 -- Fuzzy name search inside the leads library ("search-within-leads" is
 -- load-bearing per PRODUCT.md, and the library is expected to reach thousands).
-create extension if not exists pg_trgm;
+-- Installed into `extensions` per Supabase convention, which also keeps the
+-- security advisor from flagging an extension living in public.
+create extension if not exists pg_trgm with schema extensions;
 
 -- Lead lifecycle. Decided by the owner:
 --   new -> researching -> contacted -> replied -> proposal -> won | lost | parked
