@@ -1,10 +1,21 @@
 import 'server-only'
 
-import { CHECKER_VERSION, measureWebsite, type Measurement } from '@/lib/enrichment/checker'
+import { measureWebsite } from '@/lib/enrichment/checker'
+import { judgeMeasurement, judgePerformance } from '@/lib/enrichment/findings'
+import { measurePageSpeed } from '@/lib/enrichment/pagespeed'
+import {
+  claimPerformanceWork,
+  countPendingPerformance,
+  failLead,
+  reclaimStalePerformance,
+  recordPerformance,
+  writeAudit,
+  type PerformanceJob,
+} from '@/lib/enrichment/store'
 import { createServiceClient } from '@/lib/supabase/server'
 
 /*
- * The background pass.
+ * The background pass, in two stages.
  *
  * Saving must feel instant, and auditing twelve websites does not. So the save
  * route marks its leads `queued` and returns; this drains the queue afterwards,
@@ -12,17 +23,53 @@ import { createServiceClient } from '@/lib/supabase/server'
  * than a message broker on purpose — with one operator and a few dozen saves a
  * session, a table you can read in the UI beats infrastructure you cannot.
  *
- * The consequence to design around: this process can vanish mid-run. A serverless
- * invocation ends when it ends. Hence `running` is a claimed state with a
- * timestamp, and anything left holding it too long is put back.
+ * WHY TWO STAGES. The fast checks take a second or two per site. PageSpeed
+ * takes twenty, sometimes forty, because Google is really loading the page on a
+ * simulated phone. Running them together would mean a lead sits with no
+ * diagnosis at all for as long as the slowest thing in its batch, and a batch of
+ * any size would outlive the function.
+ *
+ * So stage one writes the audit row and the whole front-door diagnosis at once —
+ * the row lights up in the library within seconds — and marks the audit
+ * `psi_state = 'pending'`. Stage two drains that queue separately, filling in
+ * the same audit row as the scores arrive. A lead is never blocked on Google,
+ * and the library can show both states honestly.
+ *
+ * The consequence to design around, in both stages: this process can vanish
+ * mid-run. A serverless invocation ends when it ends. Hence every claim is a
+ * state with a timestamp, anything held too long is put back, and nothing is
+ * started that cannot plausibly finish before the deadline below.
  */
 
 /** Websites audited at once. Politeness to their servers, not a throughput knob. */
 const CONCURRENCY = 4
-/** Ceiling per invocation, so a 500-lead re-audit cannot outlive the function. */
-const BATCH_LIMIT = 25
+/** Ceiling per invocation, working with the soft deadline rather than instead of it. */
+const BATCH_LIMIT = 12
 /** A claim older than this belonged to an invocation that died. */
 const STALE_CLAIM_MINUTES = 10
+
+/** PageSpeed jobs in flight. They are almost entirely spent waiting on Google. */
+const PSI_CONCURRENCY = 4
+const PSI_BATCH = 4
+/** Shorter than the lead claim: a PageSpeed job either answers within 35s or never. */
+const PSI_STALE_MINUTES = 3
+
+/**
+ * Stop STARTING work after this long.
+ *
+ * The route allows 60s. This leaves the margin to finish whatever is already in
+ * flight and write it down, which is the difference between a pass that ends
+ * and a pass that is killed holding claims.
+ */
+const SOFT_DEADLINE_MS = 50_000
+/**
+ * PageSpeed is only started with room for its own timeout to expire first.
+ *
+ * Otherwise the invocation dies mid-call and the job sits in `running` until
+ * the stale sweep three minutes later — during which the library keeps saying
+ * it is auditing something that nobody is auditing.
+ */
+const PSI_MIN_REMAINING_MS = 38_000
 
 interface Claim {
   id: string
@@ -73,65 +120,40 @@ async function claim(leadIds: string[] | null, limit: number): Promise<Claim[]> 
 /** Put back anything a dead invocation is still holding. */
 async function reclaimStale(): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_CLAIM_MINUTES * 60_000).toISOString()
-  const supabase = createServiceClient()
 
-  await supabase
+  await createServiceClient()
     .from('leads')
     .update({ enrichment_state: 'queued', enrichment_started_at: null })
     .eq('enrichment_state', 'running')
     .lt('enrichment_started_at', cutoff)
 }
 
-async function record(leadId: string, measurement: Measurement): Promise<void> {
-  const supabase = createServiceClient()
+/** Hand back work the deadline stopped us starting, so the next pass takes it. */
+async function release(leadIds: string[]): Promise<void> {
+  if (!leadIds.length) return
 
-  /*
-   * The audit row is written even when the site did not answer. "Unreachable,
-   * checked an hour ago" is a finding the operator can act on; a lead with no
-   * audit row at all is indistinguishable from one that was never tried.
-   *
-   * The insert trigger updates leads.latest_audit_id and last_audited_at, so
-   * nothing here touches those columns.
-   */
-  const { error } = await supabase.from('lead_audits').insert({
-    lead_id: leadId,
-    checker_version: CHECKER_VERSION,
-    website_url: measurement.websiteUrl,
-    final_url: measurement.finalUrl,
-    website_status: measurement.websiteStatus,
-    http_status: measurement.httpStatus,
-    duration_ms: measurement.durationMs,
-    error: measurement.error,
-    is_https: measurement.isHttps,
-    is_mobile_friendly: measurement.isMobileFriendly,
-    has_meta_description: measurement.hasMetaDescription,
-    load_ms: measurement.loadMs,
-    copyright_year: measurement.copyrightYear,
-    platform: measurement.platform,
-    raw: measurement.raw,
-  })
-
-  if (error) throw new Error(error.message)
-
-  await supabase
+  await createServiceClient()
     .from('leads')
-    .update({ enrichment_state: 'done', enrichment_error: null })
-    .eq('id', leadId)
+    .update({ enrichment_state: 'queued', enrichment_started_at: null })
+    .in('id', leadIds)
+    .eq('enrichment_state', 'running')
 }
 
-async function fail(leadId: string, message: string): Promise<void> {
-  const supabase = createServiceClient()
-  await supabase
-    .from('leads')
-    .update({ enrichment_state: 'failed', enrichment_error: message.slice(0, 500) })
-    .eq('id', leadId)
-}
-
-/** Run `worker` over `items`, at most `limit` in flight. */
-async function pooled<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+/**
+ * Run `worker` over `items`, at most `limit` in flight, starting nothing after
+ * `deadline`. Returns whatever it never started, which the caller owes back to
+ * the queue.
+ */
+async function pooled<T>(
+  items: T[],
+  limit: number,
+  deadline: number,
+  worker: (item: T) => Promise<void>,
+): Promise<T[]> {
   let cursor = 0
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (;;) {
+      if (Date.now() >= deadline) return
       const index = cursor
       cursor += 1
       if (index >= items.length) return
@@ -139,6 +161,90 @@ async function pooled<T>(items: T[], limit: number, worker: (item: T) => Promise
     }
   })
   await Promise.all(runners)
+
+  return items.slice(Math.min(cursor, items.length))
+}
+
+/* ------------------------------------------------------------------------- *
+ * Stage one — the front door
+ * ------------------------------------------------------------------------- */
+
+async function auditOne(lead: Claim): Promise<void> {
+  try {
+    const measurement = await measureWebsite(lead.website)
+    await writeAudit(lead.id, measurement, judgeMeasurement(measurement))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'The audit failed unexpectedly.'
+    console.error('[enrichment] audit failed', { leadId: lead.id, message })
+    await failLead(lead.id, message).catch(() => {})
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Stage two — PageSpeed
+ * ------------------------------------------------------------------------- */
+
+async function profileOne(job: PerformanceJob): Promise<void> {
+  try {
+    const psi = await measurePageSpeed(job.url)
+    await recordPerformance(job.auditId, psi, judgePerformance(psi))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'PageSpeed failed unexpectedly.'
+    console.error('[enrichment] pagespeed failed', { auditId: job.auditId, message })
+
+    /*
+     * Recorded on the audit, never on the lead. The lead's own audit succeeded
+     * and its diagnosis is already on screen; only the scores are missing, and
+     * marking the whole lead `failed` over that would hide a good diagnosis
+     * behind a Google outage.
+     */
+    await recordPerformance(
+      job.auditId,
+      {
+        state: 'failed',
+        performance: null,
+        lcpMs: null,
+        cls: null,
+        error: message,
+        testedUrl: job.url,
+        fetchedAt: new Date().toISOString(),
+        reportUrl: null,
+      },
+      [],
+    ).catch(() => {})
+  }
+}
+
+/**
+ * Drain as much of the PageSpeed queue as the remaining time allows.
+ *
+ * Nothing is claimed that cannot finish, so a pass with no room simply returns
+ * 0 and the next poll picks the queue up where this left it.
+ */
+async function runPerformance(deadline: number): Promise<number> {
+  if (deadline - Date.now() < PSI_MIN_REMAINING_MS) return 0
+
+  await reclaimStalePerformance(PSI_STALE_MINUTES)
+
+  const jobs = await claimPerformanceWork(PSI_BATCH)
+  if (!jobs.length) return 0
+
+  // No deadline inside this pool: every job was claimed knowing its own timeout
+  // fits in the time left, and abandoning one mid-flight would spend a call
+  // against a rate-limited quota for nothing.
+  await pooled(jobs, PSI_CONCURRENCY, Infinity, profileOne)
+  return jobs.length
+}
+
+/* ------------------------------------------------------------------------- *
+ * The pass
+ * ------------------------------------------------------------------------- */
+
+export interface EnrichmentPass {
+  /** Leads that got an audit row and a diagnosis this invocation. */
+  audited: number
+  /** Audits that got their PageSpeed scores this invocation. */
+  profiled: number
 }
 
 /**
@@ -148,38 +254,46 @@ async function pooled<T>(items: T[], limit: number, worker: (item: T) => Promise
  * there is no one left to tell. A lead whose audit fails is marked `failed`
  * with the reason on it, which is where the operator will actually see it.
  */
-export async function runEnrichment(leadIds: string[] | null = null): Promise<number> {
+export async function runEnrichment(leadIds: string[] | null = null): Promise<EnrichmentPass> {
+  const deadline = Date.now() + SOFT_DEADLINE_MS
+  const pass: EnrichmentPass = { audited: 0, profiled: 0 }
+
   try {
     await reclaimStale()
 
     const work = await claim(leadIds, BATCH_LIMIT)
-    if (!work.length) return 0
+    if (work.length) {
+      const unstarted = await pooled(work, CONCURRENCY, deadline, auditOne)
+      await release(unstarted.map((lead) => lead.id))
+      pass.audited = work.length - unstarted.length
+    }
 
-    await pooled(work, CONCURRENCY, async (lead) => {
-      try {
-        const measurement = await measureWebsite(lead.website)
-        await record(lead.id, measurement)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'The audit failed unexpectedly.'
-        console.error('[enrichment] audit failed', { leadId: lead.id, message })
-        await fail(lead.id, message).catch(() => {})
-      }
-    })
-
-    return work.length
+    pass.profiled = await runPerformance(deadline)
   } catch (error) {
     console.error('[enrichment] pass failed', error)
-    return 0
   }
+
+  return pass
 }
 
-/** How much is still waiting. Drives the "auditing N" note in the library. */
+/**
+ * How much is still waiting, across both stages.
+ *
+ * Drives the "auditing N" note in the library and the poll that keeps the pass
+ * moving. Counting only the first stage would make the note vanish while every
+ * row was still waiting on its scores.
+ */
 export async function countPending(): Promise<number> {
   const supabase = createServiceClient()
-  const { count } = await supabase
-    .from('leads')
-    .select('id', { count: 'exact', head: true })
-    .in('enrichment_state', ['queued', 'running'])
-    .is('deleted_at', null)
-  return count ?? 0
+
+  const [leads, performance] = await Promise.all([
+    supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .in('enrichment_state', ['queued', 'running'])
+      .is('deleted_at', null),
+    countPendingPerformance(),
+  ])
+
+  return (leads.count ?? 0) + performance
 }

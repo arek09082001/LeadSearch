@@ -190,9 +190,16 @@ export function LeadsConsole({
   }, [notice])
 
   /*
-   * While audits are in flight, ask the server how many are left and refresh
-   * the page when the number moves. Polling rather than a socket because the
-   * whole thing lasts seconds and there is exactly one client.
+   * While audits are in flight, keep the queue moving and refresh the page when
+   * the number moves. Polling rather than a socket because the whole thing
+   * lasts seconds and there is exactly one client.
+   *
+   * POST, not GET, and that is load-bearing rather than pedantry: a pass is
+   * bounded by how long a serverless function may live, so the work is done in
+   * slices and something has to ask for the next one. This poll is that
+   * something — it drains the queue as well as reading it, which is how a large
+   * save finishes auditing at all, and how the slow PageSpeed stage advances
+   * behind the fast checks.
    */
   const lastPending = useRef(pendingAudits)
   useEffect(() => {
@@ -201,7 +208,7 @@ export function LeadsConsole({
 
     const timer = setInterval(async () => {
       try {
-        const response = await fetch('/api/audits')
+        const response = await fetch('/api/audits', { method: 'POST' })
         const body = (await response.json()) as { pending?: number }
         if (typeof body.pending !== 'number') return
         if (body.pending !== lastPending.current) {

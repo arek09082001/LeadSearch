@@ -1,17 +1,22 @@
 import { after } from 'next/server'
 
-import { errorResponse, readJson, requireSession } from '@/lib/api/guard'
+import { errorResponse, requireSession } from '@/lib/api/guard'
 import { countPending, runEnrichment } from '@/lib/enrichment/run'
 import { queueEnrichment } from '@/lib/leads/repository'
 
 /*
  * The audit queue, as a surface.
  *
- * GET answers "is anything still being audited?", which is what the library
- * polls while the amber `auditing` marks are on screen. POST queues leads and
- * kicks the pass — the same machinery the save route uses, exposed so that a
- * run interrupted by a dead invocation can be restarted without saving
- * anything again.
+ * GET answers "is anything still being audited?" and answers ONLY that — it is
+ * a read, and a read that quietly started work would make every page load a
+ * side effect.
+ *
+ * POST is the verb that moves the queue. With ids it queues those leads and
+ * runs; with none it is a plain "keep going", which drains whatever is already
+ * waiting in either stage. That second form is what the library polls while the
+ * amber `auditing` marks are on screen: a pass is bounded by the function's
+ * lifetime, so something has to keep asking for the next slice, and the surface
+ * that already knows the work is outstanding is the honest place for it.
  */
 
 export const runtime = 'nodejs'
@@ -30,15 +35,22 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     await requireSession()
-    const body = (await readJson(request)) as Record<string, unknown>
+
+    // An empty body is the "keep going" form, not a malformed request, so this
+    // does not go through readJson — that one is right to be strict.
+    const body = await request
+      .text()
+      .then((text) => (text ? (JSON.parse(text) as Record<string, unknown>) : {}))
+      .catch(() => {
+        throw new Error('Malformed request body.')
+      })
+
     const ids = Array.isArray(body.leadIds)
       ? body.leadIds.filter((id): id is string => typeof id === 'string')
       : []
 
     const queued = ids.length ? await queueEnrichment(ids) : 0
 
-    // With no ids, this is a plain "keep going" — it drains whatever is already
-    // queued rather than requeueing anything.
     after(() => runEnrichment(ids.length ? ids : null))
 
     return Response.json({ queued, pending: await countPending() })
