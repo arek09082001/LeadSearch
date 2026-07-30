@@ -22,6 +22,7 @@ import {
   type WebsiteStatus,
 } from '@/lib/leads/types'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
+import { readCurrentScore } from '@/lib/scoring/store'
 
 /*
  * Everything the permanent side reads and writes.
@@ -909,7 +910,9 @@ function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
 export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const supabase = createServiceClient()
 
-  const lead = await readLead(id)
+  // The score is read alongside rather than after: it hangs off the lead, not
+  // off the audit, and a lead with no audit at all can still carry one.
+  const [lead, score] = await Promise.all([readLead(id), readCurrentScore(id)])
   if (!lead) return null
 
   const { data: audits } = await supabase
@@ -922,7 +925,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [] }
+  if (!newest) return { lead, audit: null, history: [], score }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -961,7 +964,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history }
+  return { lead, audit: toAudit(newest, findings), history, score }
 }
 
 export async function updateLead(
