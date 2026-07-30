@@ -1,0 +1,370 @@
+import Link from 'next/link'
+
+import { IconExternal, IconPulse } from '@/components/icons'
+import { ReAudit } from '@/components/leads/re-audit'
+import { SEVERITY_TONE } from '@/components/leads/tone'
+import { StatusStrip } from '@/components/shell/status-strip'
+import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
+import { formatPlaceType } from '@/lib/places-types'
+import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
+
+/*
+ * One lead, and what is wrong with its website.
+ *
+ * This surface has one job, and PRODUCT.md's fourth principle sets it: a lead
+ * read cold two months later must explain itself with no memory of the session
+ * that produced it. So the page is not a record card with an audit attached —
+ * it is the diagnosis, in the order it would be said out loud, with the
+ * evidence for each claim underneath it and the business's own details reduced
+ * to the strip needed to dial the number.
+ *
+ * Faults first and passes second, both of them present. The faults are the
+ * pitch. The passes are what stops the pitch being wrong: knowing the site
+ * already has a valid certificate is what keeps him from opening a call with
+ * something the owner can immediately disprove.
+ */
+
+function fullDate(iso: string | null): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}, ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function shortDate(iso: string | null): string {
+  if (!iso) return '—'
+  const date = new Date(iso)
+  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
+}
+
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+/* ------------------------------------------------------------------------- *
+ * Evidence
+ * ------------------------------------------------------------------------- */
+
+/** `expiredMonthsAgo` reads as `expired months ago`. Enough for a caption. */
+function humanKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/^./, (first) => first.toLowerCase())
+    .replace(/\bms\b/i, 'ms')
+}
+
+function humanValue(value: unknown): string {
+  if (Array.isArray(value)) return value.join(', ')
+  if (typeof value === 'boolean') return value ? 'yes' : 'no'
+  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2)
+  return String(value).slice(0, 160)
+}
+
+/**
+ * The proof under a claim.
+ *
+ * Rendered generically from whatever the check recorded, rather than through a
+ * per-code template. A new criterion should be able to carry new evidence
+ * without anybody having to come back here and teach this component about it —
+ * and a criterion that recorded nothing shows nothing, which is a visible and
+ * useful embarrassment.
+ */
+function Evidence({ value }: { value: Record<string, unknown> | null }) {
+  if (!value) return null
+
+  const report = typeof value.reportUrl === 'string' ? value.reportUrl : null
+  const entries = Object.entries(value).filter(
+    ([key, entry]) =>
+      key !== 'reportUrl' &&
+      entry !== null &&
+      entry !== undefined &&
+      entry !== '' &&
+      !(Array.isArray(entry) && entry.length === 0),
+  )
+
+  if (!entries.length && !report) return null
+
+  return (
+    <dl className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-data text-micro">
+      {entries.map(([key, entry]) => (
+        <div key={key} className="flex items-baseline gap-1">
+          <dt className="text-ink-ghost">{humanKey(key)}</dt>
+          <dd className="text-ink-faint">{humanValue(entry)}</dd>
+        </div>
+      ))}
+      {report ? (
+        <a
+          href={report}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-ink-faint underline decoration-rule-strong underline-offset-2 transition-colors hover:text-signal"
+        >
+          run it yourself
+          <IconExternal className="size-3" />
+        </a>
+      ) : null}
+    </dl>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * The findings
+ * ------------------------------------------------------------------------- */
+
+function bySeverity(a: AuditFinding, b: AuditFinding): number {
+  const rank = severityRank(a.severity) - severityRank(b.severity)
+  return rank !== 0 ? rank : a.code.localeCompare(b.code)
+}
+
+function Fault({ finding }: { finding: AuditFinding }) {
+  const spec = isFindingCode(finding.code) ? FINDING_SPECS[finding.code] : null
+
+  return (
+    <li className="border-b border-rule px-3 py-2.5">
+      <div className="flex items-baseline gap-2">
+        <span className={`label shrink-0 ${SEVERITY_TONE[finding.severity]}`}>
+          {spec?.mark ?? finding.code}
+        </span>
+        <span className="text-sm font-semibold text-ink">{spec?.label ?? finding.code}</span>
+        <span className="ml-auto shrink-0 font-data text-micro text-ink-ghost">
+          {finding.category}
+        </span>
+      </div>
+      {/* The sentence he reads aloud. Full ink: this is the content of the page. */}
+      <p className="mt-1 max-w-[70ch] text-sm text-ink-dim">{finding.message}</p>
+      <Evidence value={finding.value} />
+    </li>
+  )
+}
+
+function Pass({ finding }: { finding: AuditFinding }) {
+  const spec = isFindingCode(finding.code) ? FINDING_SPECS[finding.code] : null
+
+  return (
+    <li className="flex items-baseline gap-2 px-3 py-1">
+      <span className="label shrink-0 text-ink-ghost">{spec?.mark ?? finding.code}</span>
+      <span className="truncate text-sm text-ink-faint" title={finding.message}>
+        {finding.message}
+      </span>
+    </li>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * The measurements
+ * ------------------------------------------------------------------------- */
+
+function yesNo(value: boolean | null): string | null {
+  return value === null ? null : value ? 'yes' : 'no'
+}
+
+/**
+ * What was observed, as opposed to what was concluded.
+ *
+ * The same split the schema draws, made visible: this column is the audit's
+ * notebook. It is deliberately duller than the diagnosis beside it — it is
+ * there to be checked against, not read.
+ */
+function Measurements({ audit }: { audit: LeadAudit }) {
+  const observed: [string, string | null][] = [
+    ['Checked', fullDate(audit.auditedAt)],
+    ['Checker', audit.checkerVersion],
+    ['Took', audit.durationMs === null ? null : seconds(audit.durationMs)],
+    ['URL', audit.websiteUrl],
+    ['Landed on', audit.finalUrl === audit.websiteUrl ? null : audit.finalUrl],
+    ['Outcome', audit.websiteStatus.replace('_', ' ')],
+    ['HTTP', audit.httpStatus === null ? null : String(audit.httpStatus)],
+    ['Presence', audit.presenceKind],
+    ['DNS resolves', yesNo(audit.dnsResolves)],
+    ['HTTPS', yesNo(audit.isHttps)],
+    ['Certificate', audit.tlsValid === null ? null : audit.tlsValid ? 'valid' : 'invalid'],
+    ['Certificate expires', audit.tlsExpiresAt ? shortDate(audit.tlsExpiresAt) : null],
+    ['Mobile viewport', yesNo(audit.isMobileFriendly)],
+    ['Title', yesNo(audit.hasTitle)],
+    ['Meta description', yesNo(audit.hasMetaDescription)],
+    ['Favicon', yesNo(audit.hasFavicon)],
+    ['Table layout', yesNo(audit.isTableLayout)],
+    ['Server response', audit.loadMs === null ? null : seconds(audit.loadMs)],
+    ['Footer year', audit.copyrightYear === null ? null : String(audit.copyrightYear)],
+    [
+      'Platform',
+      audit.platform
+        ? `${audit.platform}${audit.platformVersion ? ` ${audit.platformVersion}` : ''}`
+        : null,
+    ],
+    ['PageSpeed', audit.psiPerformance === null ? null : `${audit.psiPerformance}/100`],
+    ['LCP', audit.psiLcpMs === null ? null : seconds(audit.psiLcpMs)],
+    ['CLS', audit.psiCls === null ? null : audit.psiCls.toFixed(2)],
+  ]
+
+  // A measurement that was never taken shows nothing rather than an em dash:
+  // this column is long enough already without a list of things not known.
+  const rows = observed.filter((row): row is [string, string] => Boolean(row[1]))
+
+  return (
+    <dl className="divide-y divide-rule border-b border-rule">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex items-baseline gap-3 px-3 py-1">
+          <dt className="label w-32 shrink-0 text-ink-ghost">{label}</dt>
+          <dd className="min-w-0 truncate font-data text-micro text-ink-dim" title={value}>
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
+ * The page
+ * ------------------------------------------------------------------------- */
+
+export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
+  const { lead, audit, history } = detail
+
+  const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
+  const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
+
+  const auditing = lead.enrichmentState === 'queued' || lead.enrichmentState === 'running'
+  const profiling = audit?.psiState === 'pending' || audit?.psiState === 'running'
+
+  return (
+    <>
+      <StatusStrip provenance="book" detail={`Google data ${shortDate(lead.fetchedAt)}`}>
+        <ReAudit leadId={lead.id} pending={auditing || profiling} />
+      </StatusStrip>
+
+      <header className="border-b border-rule-strong px-3 py-2.5">
+        <Link
+          href="/leads"
+          className="label text-ink-faint transition-colors hover:text-ink-dim"
+        >
+          ← Book
+        </Link>
+
+        <h1 className="mt-1 text-lg font-semibold text-ink">{lead.name}</h1>
+
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-data text-micro text-ink-faint">
+          <span className="label text-ink-dim">{lead.status}</span>
+          {lead.formattedAddress ? <span>{lead.formattedAddress}</span> : null}
+          {lead.phone ? <a href={`tel:${lead.phone}`} className="text-ink-dim">{lead.phone}</a> : null}
+          {lead.website ? (
+            <a
+              href={lead.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 underline decoration-rule-strong underline-offset-2 transition-colors hover:text-signal"
+            >
+              {lead.website.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+              <IconExternal className="size-3" />
+            </a>
+          ) : (
+            <span className="label text-ink">No site</span>
+          )}
+          {lead.primaryType ? <span>{formatPlaceType(lead.primaryType)}</span> : null}
+          <span>saved {shortDate(lead.savedAt)}</span>
+        </div>
+      </header>
+
+      <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem]">
+        <section className="min-w-0">
+          {!audit ? (
+            <div className="px-3 py-6">
+              <p className="text-sm text-ink-dim">
+                {auditing
+                  ? 'The audit is running. This page fills in as it lands.'
+                  : lead.enrichmentState === 'failed'
+                    ? `The audit could not be run. ${lead.enrichmentError ?? ''}`
+                    : 'This lead has never been audited. Run one and it will have a diagnosis in a few seconds.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-dim">
+                {faults.length
+                  ? `Diagnosis — ${faults.length} ${faults.length === 1 ? 'fault' : 'faults'}`
+                  : 'Diagnosis'}
+              </h2>
+
+              {faults.length ? (
+                <ul>
+                  {faults.map((entry) => (
+                    <Fault key={entry.code} finding={entry} />
+                  ))}
+                </ul>
+              ) : (
+                <p className="border-b border-rule px-3 py-4 text-sm text-ink-dim">
+                  Nothing to sell against. Every check this audit can make, this site passed.
+                </p>
+              )}
+
+              {/*
+                PageSpeed lands a stage later than everything above. Saying so
+                is the difference between "still measuring" and "measured and
+                fine", and the operator is about to phone someone about it.
+              */}
+              {profiling ? (
+                <p className="label flex items-center gap-1.5 border-b border-rule px-3 py-2 text-ink-faint">
+                  <IconPulse className="size-3.5 animate-pulse" />
+                  Waiting on Google PageSpeed
+                </p>
+              ) : audit.psiState === 'failed' ? (
+                <p className="border-b border-rule px-3 py-2 text-sm text-ink-faint">
+                  PageSpeed could not score this site. {audit.psiError}
+                </p>
+              ) : null}
+
+              {passes.length ? (
+                <>
+                  <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-ghost">
+                    Passed — do not claim these are wrong
+                  </h2>
+                  <ul className="divide-y divide-rule border-b border-rule">
+                    {passes.map((entry) => (
+                      <Pass key={entry.code} finding={entry} />
+                    ))}
+                  </ul>
+                </>
+              ) : null}
+            </>
+          )}
+        </section>
+
+        <aside className="min-w-0 border-t border-rule lg:border-l lg:border-t-0">
+          {audit ? (
+            <>
+              <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-ghost">
+                Measured
+              </h2>
+              <Measurements audit={audit} />
+            </>
+          ) : null}
+
+          {history.length ? (
+            <>
+              <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-ghost">
+                Earlier audits
+              </h2>
+              <ul className="divide-y divide-rule border-b border-rule">
+                {history.map((entry) => (
+                  <li key={entry.id} className="flex items-baseline gap-3 px-3 py-1">
+                    <span className="font-data text-micro text-ink-faint">
+                      {shortDate(entry.auditedAt)}
+                    </span>
+                    <span className="label text-ink-ghost">
+                      {entry.websiteStatus.replace('_', ' ')}
+                    </span>
+                    <span className="ml-auto shrink-0 font-data text-micro text-ink-faint">
+                      {entry.failedCodes.length} fault
+                      {entry.failedCodes.length === 1 ? '' : 's'}
+                      {entry.psiPerformance === null ? '' : ` · PS ${entry.psiPerformance}`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </aside>
+      </div>
+    </>
+  )
+}

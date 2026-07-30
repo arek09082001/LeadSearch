@@ -1,14 +1,13 @@
 'use client'
 
+import Link from 'next/link'
+
 import { IconChevronDown, IconExternal, IconPulse } from '@/components/icons'
+import { SEVERITY_TONE } from '@/components/leads/tone'
 import { Checkbox } from '@/components/ui/controls'
+import { FINDING_SPECS, sortCodes } from '@/lib/enrichment/vocabulary'
 import { formatPlaceType } from '@/lib/places-types'
-import {
-  SLOW_LOAD_MS,
-  STALE_COPYRIGHT_YEARS,
-  type LeadRow,
-  type LeadSort,
-} from '@/lib/leads/types'
+import { type LeadRow, type LeadSort } from '@/lib/leads/types'
 
 /*
  * The book, as rows.
@@ -85,12 +84,20 @@ function today(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
+/** Beyond this the column stops being scannable and starts being a paragraph. */
+const MAX_MARKS = 4
+
 /**
  * The audit, as marks.
  *
  * Only faults are drawn. A row of green ticks for everything a site got right
  * would fill the widest column on the surface with the one thing the operator
- * is never looking for, and the eye would have to subtract it every pass.
+ * is never looking for, and the eye would have to subtract it every pass. The
+ * passing checks are all still there — they are on the lead's own page, where
+ * "and these are fine" is worth having in front of you on a call.
+ *
+ * Every mark comes from the shared finding vocabulary rather than from logic
+ * restated here, so a row and the diagnosis behind it cannot drift apart.
  */
 function AuditMarks({ lead }: { lead: LeadRow }) {
   if (lead.enrichmentState === 'queued' || lead.enrichmentState === 'running') {
@@ -114,74 +121,77 @@ function AuditMarks({ lead }: { lead: LeadRow }) {
     return <span className="label text-ink-faint">Not audited</span>
   }
 
-  const marks: React.ReactNode[] = []
-  const staleBefore = new Date().getFullYear() - STALE_COPYRIGHT_YEARS
+  const codes = sortCodes(lead.auditFlags)
+  const shown = codes.slice(0, MAX_MARKS)
+  const hidden = codes.length - shown.length
 
-  if (lead.websiteStatus === 'no_website') {
-    marks.push(
-      <span key="none" className="label text-ink">
-        No site
-      </span>,
-    )
-  } else if (lead.websiteStatus === 'unreachable') {
-    marks.push(
-      <span key="dead" className="label text-ink">
-        Unreachable
-      </span>,
-    )
-  } else {
-    if (lead.isHttps === false) {
-      marks.push(
-        <span key="https" className="label text-ink">
-          No HTTPS
-        </span>,
-      )
-    }
-    if (lead.isMobileFriendly === false) {
-      marks.push(
-        <span key="mobile" className="label text-ink">
-          Not mobile
-        </span>,
-      )
-    }
-    if (lead.hasMetaDescription === false) {
-      marks.push(
-        <span key="meta" className="label text-ink-dim">
-          No meta
-        </span>,
-      )
-    }
-    if (lead.copyrightYear !== null && lead.copyrightYear < staleBefore) {
-      marks.push(
-        <span key="year" className="font-data text-micro text-ink" title="Footer copyright year">
-          ©{lead.copyrightYear}
-        </span>,
-      )
-    }
-    if (lead.loadMs !== null && lead.loadMs > SLOW_LOAD_MS) {
-      marks.push(
-        <span key="slow" className="font-data text-micro text-ink-dim" title="Page load time">
-          {(lead.loadMs / 1000).toFixed(1)}s
-        </span>,
-      )
-    }
-  }
+  /*
+   * PageSpeed arrives a stage after everything else, so the row says which of
+   * the two it is looking at. A silent gap where a score will be would read as
+   * "tested and fine", which is the one thing it does not mean.
+   */
+  const pending = lead.psiState === 'pending' || lead.psiState === 'running'
 
-  if (!marks.length) {
+  const trailing = (
+    <>
+      {pending ? (
+        <span className="font-data text-micro text-ink-ghost" title="Waiting on Google PageSpeed">
+          PS…
+        </span>
+      ) : lead.psiPerformance !== null ? (
+        <span
+          className={`font-data text-micro ${lead.psiPerformance < 50 ? 'text-ink-dim' : 'text-ink-faint'}`}
+          title={`Google PageSpeed, mobile: ${lead.psiPerformance}/100`}
+        >
+          PS {lead.psiPerformance}
+        </span>
+      ) : null}
+      {lead.platform ? (
+        <span className="font-data text-micro text-ink-faint" title="Detected platform">
+          {lead.platform}
+          {lead.platformVersion ? ` ${lead.platformVersion}` : ''}
+        </span>
+      ) : null}
+    </>
+  )
+
+  if (!shown.length) {
     return (
-      <span className="label text-ink-faint" title={`Audited ${shortDate(lead.lastAuditedAt)}`}>
-        Nothing found
-        {lead.platform ? ` · ${lead.platform}` : ''}
+      <span
+        className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"
+        title={`Audited ${shortDate(lead.lastAuditedAt)}`}
+      >
+        <span className="label text-ink-faint">Nothing found</span>
+        {trailing}
       </span>
     )
   }
 
   return (
-    <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5" title={`Audited ${shortDate(lead.lastAuditedAt)}`}>
-      {marks}
-      {lead.platform ? (
-        <span className="font-data text-micro text-ink-faint">{lead.platform}</span>
+    <span
+      className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5"
+      title={`Audited ${shortDate(lead.lastAuditedAt)}`}
+    >
+      {shown.map((code) => (
+        <span
+          key={code}
+          className={`label ${SEVERITY_TONE[FINDING_SPECS[code].severity]}`}
+          title={FINDING_SPECS[code].label}
+        >
+          {FINDING_SPECS[code].mark}
+        </span>
+      ))}
+      {hidden > 0 ? (
+        <span
+          className="font-data text-micro text-ink-faint"
+          title={sortCodes(codes.slice(MAX_MARKS))
+            .map((code) => FINDING_SPECS[code].label)
+            .join(' · ')}
+        >
+          +{hidden}
+        </span>
       ) : null}
+      {trailing}
     </span>
   )
 }
@@ -300,12 +310,21 @@ export function LeadsTable({
 
                 <td className="px-2 py-1.5">
                   <div className="flex items-baseline gap-2">
-                    <span
-                      className={`truncate ${deleted ? 'text-ink-faint line-through' : 'text-ink'}`}
+                    {/*
+                      The way into the diagnosis. A name is what the operator
+                      already looks at to identify a row, so it is what he
+                      should be able to click — no separate affordance to find,
+                      and no widening of the row to hold one.
+                    */}
+                    <Link
+                      href={`/leads/${lead.id}`}
+                      className={`truncate underline decoration-transparent underline-offset-2 transition-colors hover:decoration-ink-faint ${
+                        deleted ? 'text-ink-faint line-through' : 'text-ink'
+                      }`}
                       title={lead.name}
                     >
                       {lead.name}
-                    </span>
+                    </Link>
                     {lead.lists.map((list) => (
                       <span
                         key={list.id}

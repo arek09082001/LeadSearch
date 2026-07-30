@@ -1,3 +1,10 @@
+import {
+  FINDING_CODES,
+  FINDING_SPECS,
+  type FindingCode,
+  type FindingSeverity,
+} from '@/lib/enrichment/vocabulary'
+
 /*
  * The library's vocabulary, in one place that both halves may import.
  *
@@ -26,32 +33,37 @@ export type WebsiteStatus = 'no_website' | 'unreachable' | 'reachable' | 'error'
 /** Mirrors public.enrichment_state. */
 export type EnrichmentState = 'queued' | 'running' | 'done' | 'failed'
 
+/** Mirrors public.psi_state — the PageSpeed stage's own lifecycle. */
+export type PsiState = 'pending' | 'running' | 'ok' | 'failed' | 'skipped'
+
 /**
- * The audit filters the library offers.
+ * The absence of an audit, as something filterable.
  *
- * Every one of these reads a MEASUREMENT off the newest audit — a fact about a
- * page, not a verdict on it. The criteria that decide whether a site is bad,
- * and what each fault is worth, are explicitly undecided in PRODUCT.md and are
- * not encoded here. When they are decided they arrive as findings, and this
- * list grows to match without a migration.
+ * Not a finding — a lead with no audit has no findings to have. The library
+ * view synthesises it into `audit_flags` anyway, so that every audit filter,
+ * including this one, is a single overlap test against one array. See the view
+ * definition for why that is worth a little synthesis.
+ */
+export const NEVER_AUDITED = 'never_audited'
+
+/**
+ * The audit filters the library offers: one per finding the audit can produce,
+ * plus the absence of an audit.
+ *
+ * Derived from the finding vocabulary rather than restated, so a new check is
+ * filterable the moment it exists — no migration, and no chance of the menu and
+ * the pass disagreeing about what a code means.
  */
 export const AUDIT_FILTERS = [
-  { key: 'no_website', label: 'No website' },
-  { key: 'unreachable', label: 'Site unreachable' },
-  { key: 'no_https', label: 'No HTTPS' },
-  { key: 'not_mobile', label: 'Not mobile-friendly' },
-  { key: 'no_meta', label: 'No meta description' },
-  { key: 'stale_copyright', label: 'Stale copyright' },
-  { key: 'slow', label: 'Slow to load' },
-  { key: 'never_audited', label: 'Never audited' },
-] as const
+  ...FINDING_CODES.map((code) => ({
+    key: code as FindingCode | typeof NEVER_AUDITED,
+    label: FINDING_SPECS[code].mark,
+    category: FINDING_SPECS[code].category as string,
+  })),
+  { key: NEVER_AUDITED as FindingCode | typeof NEVER_AUDITED, label: 'Never audited', category: 'other' },
+]
 
-export type AuditFilter = (typeof AUDIT_FILTERS)[number]['key']
-
-/** A footer year this far behind is the abandonment tell the audit looks for. */
-export const STALE_COPYRIGHT_YEARS = 2
-/** Above this, a page is slow enough to be worth saying so. */
-export const SLOW_LOAD_MS = 3000
+export type AuditFilter = FindingCode | typeof NEVER_AUDITED
 
 export const FOLLOW_UP_FILTERS = [
   { key: 'overdue', label: 'Overdue' },
@@ -147,12 +159,34 @@ export interface LeadRow {
   enrichmentError: string | null
 
   /** Measured signals off the newest audit. Null means unknown, never false. */
+  dnsResolves: boolean | null
   isHttps: boolean | null
+  tlsValid: boolean | null
   isMobileFriendly: boolean | null
+  hasTitle: boolean | null
   hasMetaDescription: boolean | null
+  hasFavicon: boolean | null
+  isTableLayout: boolean | null
   loadMs: number | null
   copyrightYear: number | null
   platform: string | null
+  platformVersion: string | null
+  presenceKind: string | null
+
+  /** PageSpeed, which arrives a stage later than everything above it. */
+  psiState: PsiState | null
+  psiPerformance: number | null
+  psiLcpMs: number | null
+  psiCls: number | null
+
+  /**
+   * The newest audit's failed finding codes — the diagnosis, as marks.
+   *
+   * Rendered through the shared vocabulary rather than through per-column
+   * logic, so the row and the detail page cannot disagree about what was found.
+   * Holds the single synthetic `never_audited` when there is no audit at all.
+   */
+  auditFlags: string[]
 
   lists: { id: string; name: string }[]
   noteCount: number
@@ -275,4 +309,75 @@ export interface SavedView {
   filters: LeadFilters
   position: number
   lastUsedAt: string | null
+}
+
+/* ------------------------------------------------------------------------- *
+ * The diagnosis
+ * ------------------------------------------------------------------------- */
+
+/** One judgement, with the evidence that produced it. */
+export interface AuditFinding {
+  code: string
+  category: string
+  severity: FindingSeverity
+  passed: boolean
+  /** The proof. A PageSpeed score of 23 is a sales argument, not just a number. */
+  value: Record<string, unknown> | null
+  message: string
+}
+
+/** One audit in full: what was observed, and what was concluded from it. */
+export interface LeadAudit {
+  id: string
+  auditedAt: string
+  checkerVersion: string
+
+  websiteUrl: string | null
+  finalUrl: string | null
+  websiteStatus: WebsiteStatus
+  httpStatus: number | null
+  durationMs: number | null
+  error: string | null
+
+  dnsResolves: boolean | null
+  isHttps: boolean | null
+  tlsValid: boolean | null
+  tlsExpiresAt: string | null
+  isMobileFriendly: boolean | null
+  hasTitle: boolean | null
+  hasMetaDescription: boolean | null
+  hasFavicon: boolean | null
+  isTableLayout: boolean | null
+  loadMs: number | null
+  copyrightYear: number | null
+  platform: string | null
+  platformVersion: string | null
+  presenceKind: string | null
+
+  psiState: PsiState
+  psiPerformance: number | null
+  psiLcpMs: number | null
+  psiCls: number | null
+  psiError: string | null
+  psiCheckedAt: string | null
+
+  findings: AuditFinding[]
+}
+
+/** A past audit, as one line. Enough to see that somebody finally fixed the site. */
+export interface AuditSummary {
+  id: string
+  auditedAt: string
+  websiteStatus: WebsiteStatus
+  checkerVersion: string
+  failedCodes: string[]
+  psiPerformance: number | null
+}
+
+export interface LeadDetail {
+  lead: LeadRow
+  /** The newest audit, in full. Null when nothing has audited this lead yet. */
+  audit: LeadAudit | null
+  /** Every audit before it, newest first. History is the point of re-running. */
+  history: AuditSummary[]
 }

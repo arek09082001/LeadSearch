@@ -3,21 +3,25 @@ import 'server-only'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
   PAGE_SIZE,
-  SLOW_LOAD_MS,
-  STALE_COPYRIGHT_YEARS,
+  type AuditFinding,
+  type AuditSummary,
   type BulkAction,
   type BulkResult,
   type EnrichmentState,
+  type LeadAudit,
+  type LeadDetail,
   type LeadFacets,
   type LeadFilters,
   type LeadListing,
   type LeadRow,
   type LeadStatus,
+  type PsiState,
   type SaveRequest,
   type SaveResult,
   type SaveResultItem,
   type WebsiteStatus,
 } from '@/lib/leads/types'
+import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
 
 /*
  * Everything the permanent side reads and writes.
@@ -51,12 +55,24 @@ interface LibraryRecord {
   enrichment_state: EnrichmentState | null
   enrichment_error: string | null
   website_status: WebsiteStatus | null
+  dns_resolves: boolean | null
   is_https: boolean | null
+  tls_valid: boolean | null
   is_mobile_friendly: boolean | null
+  has_title: boolean | null
   has_meta_description: boolean | null
+  has_favicon: boolean | null
+  is_table_layout: boolean | null
   load_ms: number | null
   copyright_year: number | null
   platform: string | null
+  platform_version: string | null
+  presence_kind: string | null
+  psi_state: PsiState | null
+  psi_performance: number | null
+  psi_lcp_ms: number | null
+  psi_cls: number | string | null
+  audit_flags: string[] | null
   list_ids: string[] | null
   note_count: number | null
 }
@@ -67,7 +83,7 @@ interface LibraryRecord {
  * splitting it across lines to be tidy collapses that inference to `string`.
  */
 const LIBRARY_COLUMNS =
-  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, is_https, is_mobile_friendly, has_meta_description, load_ms, copyright_year, platform, list_ids, note_count'
+  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, list_ids, note_count'
 
 function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
   return {
@@ -93,12 +109,25 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
     websiteStatus: record.website_status,
     enrichmentState: record.enrichment_state,
     enrichmentError: record.enrichment_error,
+    dnsResolves: record.dns_resolves,
     isHttps: record.is_https,
+    tlsValid: record.tls_valid,
     isMobileFriendly: record.is_mobile_friendly,
+    hasTitle: record.has_title,
     hasMetaDescription: record.has_meta_description,
+    hasFavicon: record.has_favicon,
+    isTableLayout: record.is_table_layout,
     loadMs: record.load_ms,
     copyrightYear: record.copyright_year,
     platform: record.platform,
+    platformVersion: record.platform_version,
+    presenceKind: record.presence_kind,
+    psiState: record.psi_state,
+    psiPerformance: record.psi_performance,
+    psiLcpMs: record.psi_lcp_ms,
+    // numeric(5,3) arrives as a string from PostgREST, like rating above.
+    psiCls: record.psi_cls === null ? null : Number(record.psi_cls),
+    auditFlags: record.audit_flags ?? [],
     lists: (record.list_ids ?? [])
       .map((id) => ({ id, name: listNames.get(id) ?? 'Unknown list' }))
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
@@ -111,41 +140,6 @@ function today(offsetDays = 0): string {
   const now = new Date()
   now.setDate(now.getDate() + offsetDays)
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
-/**
- * The audit filters, as PostgREST predicates.
- *
- * Several selected at once are OR'd, not AND'd: "no HTTPS, not mobile-friendly"
- * means show me leads with either fault. Anding them would describe a single
- * site with every fault at once, which is a search that returns nothing and
- * teaches the operator not to use the filter.
- */
-function auditPredicates(keys: string[]): string[] {
-  const staleBefore = new Date().getFullYear() - STALE_COPYRIGHT_YEARS
-
-  return keys.map((key) => {
-    switch (key) {
-      case 'no_website':
-        return 'website_status.eq.no_website'
-      case 'unreachable':
-        return 'website_status.eq.unreachable'
-      case 'no_https':
-        return 'is_https.is.false'
-      case 'not_mobile':
-        return 'is_mobile_friendly.is.false'
-      case 'no_meta':
-        return 'has_meta_description.is.false'
-      case 'stale_copyright':
-        return `copyright_year.lt.${staleBefore}`
-      case 'slow':
-        return `load_ms.gt.${SLOW_LOAD_MS}`
-      case 'never_audited':
-        return 'latest_audit_id.is.null'
-      default:
-        return ''
-    }
-  }).filter(Boolean)
 }
 
 const SORT_COLUMNS: Record<LeadFilters['sort'], string> = {
@@ -213,8 +207,21 @@ function applyFilters<T>(query: T, filters: LeadFilters): T {
   if (filters.scoreMin !== null) result = result.gte('current_score', filters.scoreMin)
   if (filters.scoreMax !== null) result = result.lte('current_score', filters.scoreMax)
 
-  const audit = auditPredicates(filters.audit)
-  if (audit.length) result = result.or(audit.join(','))
+  /*
+   * The audit filters, in one predicate.
+   *
+   * Several selected at once are OR'd, not AND'd: "no HTTPS, not mobile" means
+   * show me leads with either fault. Anding them would describe a single site
+   * carrying every fault at once, which returns nothing and teaches the
+   * operator to stop using the filter.
+   *
+   * An overlap against `audit_flags` IS that OR, which is the whole reason the
+   * view synthesises that column — including the one flag that is not a
+   * finding, `never_audited`. The alternative was OR-ing an array predicate
+   * against a null check inside a hand-built PostgREST filter string, and this
+   * has one thing that cannot be got wrong instead of two that can.
+   */
+  if (filters.audit.length) result = result.overlaps('audit_flags', filters.audit)
 
   switch (filters.followUp) {
     case 'overdue':
@@ -814,6 +821,147 @@ export async function readLead(id: string): Promise<LeadRow | null> {
   ])
   if (!data) return null
   return toRow(data as unknown as LibraryRecord, listNames)
+}
+
+/*
+ * One unbroken literal, for the same reason LIBRARY_COLUMNS is one.
+ */
+const AUDIT_COLUMNS =
+  'id, audited_at, checker_version, website_url, final_url, website_status, http_status, duration_ms, error, dns_resolves, is_https, tls_valid, tls_expires_at, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, psi_error, psi_checked_at, failed_codes'
+
+interface AuditRecord {
+  id: string
+  audited_at: string
+  checker_version: string
+  website_url: string | null
+  final_url: string | null
+  website_status: WebsiteStatus
+  http_status: number | null
+  duration_ms: number | null
+  error: string | null
+  dns_resolves: boolean | null
+  is_https: boolean | null
+  tls_valid: boolean | null
+  tls_expires_at: string | null
+  is_mobile_friendly: boolean | null
+  has_title: boolean | null
+  has_meta_description: boolean | null
+  has_favicon: boolean | null
+  is_table_layout: boolean | null
+  load_ms: number | null
+  copyright_year: number | null
+  platform: string | null
+  platform_version: string | null
+  presence_kind: string | null
+  psi_state: PsiState
+  psi_performance: number | null
+  psi_lcp_ms: number | null
+  psi_cls: number | string | null
+  psi_error: string | null
+  psi_checked_at: string | null
+  failed_codes: string[] | null
+}
+
+function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
+  return {
+    id: record.id,
+    auditedAt: record.audited_at,
+    checkerVersion: record.checker_version,
+    websiteUrl: record.website_url,
+    finalUrl: record.final_url,
+    websiteStatus: record.website_status,
+    httpStatus: record.http_status,
+    durationMs: record.duration_ms,
+    error: record.error,
+    dnsResolves: record.dns_resolves,
+    isHttps: record.is_https,
+    tlsValid: record.tls_valid,
+    tlsExpiresAt: record.tls_expires_at,
+    isMobileFriendly: record.is_mobile_friendly,
+    hasTitle: record.has_title,
+    hasMetaDescription: record.has_meta_description,
+    hasFavicon: record.has_favicon,
+    isTableLayout: record.is_table_layout,
+    loadMs: record.load_ms,
+    copyrightYear: record.copyright_year,
+    platform: record.platform,
+    platformVersion: record.platform_version,
+    presenceKind: record.presence_kind,
+    psiState: record.psi_state,
+    psiPerformance: record.psi_performance,
+    psiLcpMs: record.psi_lcp_ms,
+    psiCls: record.psi_cls === null ? null : Number(record.psi_cls),
+    psiError: record.psi_error,
+    psiCheckedAt: record.psi_checked_at,
+    findings,
+  }
+}
+
+/**
+ * One lead, with its diagnosis and everything before it.
+ *
+ * The newest audit comes back in full — every measurement, every judgement,
+ * every piece of evidence — because that is what the operator reads aloud on a
+ * call. The rest come back as one line each, which is all history is for: it
+ * answers "has anything changed since I last looked", not "what exactly did the
+ * page say in March".
+ */
+export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
+  const supabase = createServiceClient()
+
+  const lead = await readLead(id)
+  if (!lead) return null
+
+  const { data: audits } = await supabase
+    .from('lead_audits')
+    .select(AUDIT_COLUMNS)
+    .eq('lead_id', id)
+    .order('audited_at', { ascending: false })
+    .limit(25)
+
+  const records = (audits ?? []) as unknown as AuditRecord[]
+  const newest = records[0] ?? null
+
+  if (!newest) return { lead, audit: null, history: [] }
+
+  const { data: findingRows } = await supabase
+    .from('lead_audit_findings')
+    .select('code, category, severity, passed, value, message')
+    .eq('audit_id', newest.id)
+
+  const findings = ((findingRows ?? []) as {
+    code: string
+    category: string | null
+    severity: FindingSeverity
+    passed: boolean
+    value: Record<string, unknown> | null
+    message: string | null
+  }[]).map((row) => ({
+    code: row.code,
+    category: row.category ?? 'other',
+    severity: row.severity,
+    passed: row.passed,
+    value: row.value,
+    message: row.message ?? '',
+  }))
+
+  /*
+   * Past audits are summarised from the codes already folded onto them, not
+   * from their findings. Fetching the full diagnosis for twenty-five historical
+   * audits in order to render twenty-five one-line summaries would be most of a
+   * megabyte spent on a column of dates — which is exactly what `failed_codes`
+   * on the audit row is for.
+   */
+  const history: AuditSummary[] = records.slice(1).map((record) => ({
+    id: record.id,
+    auditedAt: record.audited_at,
+    websiteStatus: record.website_status,
+    checkerVersion: record.checker_version,
+    failedCodes: record.failed_codes ?? [],
+    psiPerformance: record.psi_performance,
+  }))
+
+  return { lead, audit: toAudit(newest, findings), history }
 }
 
 export async function updateLead(
