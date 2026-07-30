@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 2,
+  "name": "Lead Engine",
+  "northStar": "The dealing screen — a market terminal's grammar applied to local prospecting, where the live feed and your book are different materials.",
+  "seedKey": "58af9e90",
+  "mode": "operate",
+  "colorMeta": {
+    "ground": { "displayName": "Ground", "role": "surface", "note": "The field. Dark chosen from the use scene: one operator, desk, evening sessions." },
+    "panel": { "displayName": "Panel", "role": "surface-container" },
+    "raise": { "displayName": "Raise", "role": "surface-container-high", "note": "Hover fills and skeleton bars only." },
+    "rule": { "displayName": "Rule", "role": "outline-variant", "note": "The structural element of this system." },
+    "rule-strong": { "displayName": "Rule strong", "role": "outline" },
+    "ink": { "displayName": "Ink", "role": "on-surface", "contrastOnGround": 15.7 },
+    "ink-dim": { "displayName": "Ink dim", "role": "on-surface-variant", "contrastOnGround": 7.3 },
+    "ink-faint": { "displayName": "Ink faint", "role": "on-surface-faint", "contrastOnGround": 5.4, "note": "Lowest legal text colour." },
+    "ink-ghost": { "displayName": "Ink ghost", "role": "outline-decorative", "contrastOnGround": 2.7, "note": "NON-TEXT ONLY. Fails AA by design; borders and rules only." },
+    "signal": { "displayName": "Signal amber", "role": "primary", "note": "The only accent. Primary action, focus, active surface, the book." },
+    "live": { "displayName": "Live green", "role": "semantic-live", "note": "Transient Google data. Never decoration." },
+    "alert": { "displayName": "Alert red", "role": "semantic-error", "note": "Failure and destructive intent. Never decoration." }
+  },
+  "typographyMeta": {
+    "data": { "note": "tabular-nums and slashed zero forced. Monospace for measurement, never as a technical costume." },
+    "label": { "note": "Sets no colour on purpose so callers own it and it never fights an active state on specificity." }
+  },
+  "extensions": {
+    "elevation": {
+      "strategy": "tonal",
+      "shadows": "none",
+      "note": "Depth is ground -> panel -> raise separated by 1px rules. A shadow anywhere is a defect.",
+      "exceptions": {
+        "masthead": "position: sticky; background: ground/95%; backdrop-filter: blur(2px)"
+      }
+    },
+    "motion": {
+      "philosophy": "One authored moment, not scattered effects. Everything starts already visible.",
+      "tokens": {
+        "state-change": "150ms, colors only",
+        "tick-in": "900ms cubic-bezier(0.16, 1, 0.3, 1)",
+        "skeleton-stagger": "45ms per row"
+      },
+      "tick-in": "A new row on the feed flashes 18% signal on its ground and settles — the way a quote ticks. Not a slide-in.",
+      "reducedMotion": "All animation and transition collapsed to 0.01ms under prefers-reduced-motion."
+    },
+    "focus": {
+      "ring": "1px solid var(--color-signal)",
+      "offset": "1px",
+      "selector": ":focus-visible",
+      "note": "One treatment everywhere. The product is keyboard-first."
+    },
+    "breakpoints": {
+      "md": "768px",
+      "lg": "1024px",
+      "strategy": "Desktop-primary, phone-tolerant. Below md the wordmark, key hints and provenance sentence drop out in that order. The provenance dot, surface label and record count never drop.",
+      "verifiedNoOverflowAt": [360, 414, 768, 1024, 1440]
+    },
+    "keyboard": {
+      "Alt+1": "/search",
+      "Alt+2": "/leads",
+      "Alt+3": "/outreach",
+      "note": "Alt-modified deliberately, so plain digits stay free for filter and search fields."
+    },
+    "icons": {
+      "grid": 16,
+      "strokeWidth": 1.5,
+      "linecap": "butt",
+      "linejoin": "miter",
+      "fill": "none",
+      "source": "authored SVG in components/icons.tsx",
+      "note": "Emoji and Unicode glyphs are not an icon system."
+    },
+    "scrollbars": {
+      "width": "thin",
+      "color": "rule-strong on transparent",
+      "note": "color-scheme: dark so native controls follow the world."
+    },
+    "rules": [
+      "Nothing is rounded; radius-none is the only radius token.",
+      "No shadows, glass, or gradients.",
+      "ink-ghost is never used for text.",
+      "Content is edge to edge; only prose blocks are measured (46-52ch).",
+      "Structure with rules, not containers. No cards.",
+      "Every data surface states its provenance and the age of its data.",
+      "A saved lead and a search result must never look alike."
+    ],
+    "antiReferences": [
+      "generic SaaS admin templates",
+      "CRM dashboards covered in donut charts",
+      "purple-to-blue gradient heroes"
+    ]
+  }
+}

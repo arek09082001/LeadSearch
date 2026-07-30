@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/*
+  Lead Engine — dealing screen.
+
+  Ground is dark because of the scene, not the category: one operator, at a desk,
+  in hour-long sessions that run into the evening, reading ranked rows. A dark
+  field keeps a mostly-empty screen from glaring and lets three signal colours
+  do actual work.
+
+  Colour strategy: Restrained. Neutrals carry the surface; amber is the only
+  accent. Green and red are never decoration — they mean live and cold.
+*/
+
+@theme {
+  /* Ground and structure. Rules, not boxes. */
+  --color-ground: #0a0b0d;
+  --color-panel: #101215;
+  --color-raise: #171a1f;
+  --color-rule: #21252b;
+  --color-rule-strong: #2f353d;
+
+  /* Ink. Every value below is >= 4.5:1 on --color-ground. */
+  --color-ink: #e8ebee;
+  --color-ink-dim: #98a0aa;
+  --color-ink-faint: #7d8792;
+  /* Non-text only: dividers, disabled glyphs, hatching. Never sets type. */
+  --color-ink-ghost: #4a525b;
+
+  /* Signal. Meaning, never mood. */
+  --color-signal: #e0a340;
+  --color-live: #4cc38a;
+  --color-alert: #ef5f5f;
+
+  --font-ui: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-data: var(--font-jetbrains), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Dense scale. The tenth minute of a session, not the first impression. */
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 0.875rem;
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1rem;
+  --text-sm: 0.75rem;
+  --text-sm--line-height: 1.0625rem;
+  --text-base: 0.8125rem;
+  --text-base--line-height: 1.25rem;
+  --text-lg: 0.9375rem;
+  --text-lg--line-height: 1.375rem;
+  --text-xl: 1.1875rem;
+  --text-xl--line-height: 1.5rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.75rem;
+
+  /* Nothing in this world is rounded. */
+  --radius-none: 0px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-rule);
+  }
+
+  html {
+    background-color: var(--color-ground);
+    /* Scrollbars, form controls and caret follow the world instead of the OS. */
+    color-scheme: dark;
+    /* The operator asked for small type. Never let a browser hint it smaller. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Terminal figures must line up in a column, always. */
+  .font-data,
+  [class*="font-data"] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /* One visible focus treatment, everywhere, keyboard-first by design. */
+  :focus-visible {
+    outline: 1px solid var(--color-signal);
+    outline-offset: 1px;
+  }
+
+  /* Dense surfaces will scroll a lot. The bar is part of the instrument. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule-strong) transparent;
+  }
+
+  ::selection {
+    background-color: var(--color-signal);
+    color: var(--color-ground);
+  }
+
+  ::placeholder {
+    color: var(--color-ink-faint);
+  }
+}
+
+@utility label {
+  font-family: var(--font-ui);
+  font-size: var(--text-label);
+  line-height: var(--text-label--line-height);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  /* Deliberately sets no colour: callers own it, so the utility never fights
+     an inherited or active-state colour on specificity. */
+}
+
+/*
+  The one authored moment: a new row arrives on the feed the way a quote ticks.
+  A brief ground flash that settles, not a slide-in. Already-visible default.
+*/
+@keyframes tick-in {
+  from {
+    background-color: color-mix(in oklab, var(--color-signal) 18%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@utility tick {
+  animation: tick-in 900ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
