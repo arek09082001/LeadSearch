@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 
 import { IconChevronDown, IconExternal } from '@/components/icons'
+import { Checkbox } from '@/components/ui/controls'
 import { formatPlaceType } from '@/lib/places-types'
 import type { SearchRow } from '@/lib/search/types'
 
@@ -38,6 +39,9 @@ interface Column {
 }
 
 const COLUMNS: Column[] = [
+  // The selection column. No label: the header holds the select-all box, and a
+  // word above a checkbox would be a caption for a control that explains itself.
+  { key: null, label: '', className: 'w-8 pl-3' },
   { key: 'rank', label: '#', className: 'w-10 text-right' },
   { key: 'name', label: 'Business', className: 'min-w-[14rem]' },
   { key: null, label: 'Category', className: 'hidden w-40 xl:table-cell' },
@@ -58,7 +62,19 @@ function hostname(url: string): string {
   }
 }
 
-export function ResultsTable({ rows, running }: { rows: SearchRow[]; running: boolean }) {
+export function ResultsTable({
+  rows,
+  running,
+  selected,
+  onSelect,
+}: {
+  rows: SearchRow[]
+  running: boolean
+  /** Place ids currently ticked. Owned above, because the save bar acts on them. */
+  selected: Set<string>
+  /** Replaces the whole selection — the caller decides what a click means. */
+  onSelect: (next: Set<string>) => void
+}) {
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'rank', desc: false })
 
   const sorted = useMemo(() => {
@@ -95,23 +111,45 @@ export function ResultsTable({ rows, running }: { rows: SearchRow[]; running: bo
     )
   }
 
+  const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.providerPlaceId))
+  const someSelected = !allSelected && rows.some((row) => selected.has(row.providerPlaceId))
+
+  function toggleRow(placeId: string, checked: boolean) {
+    const next = new Set(selected)
+    if (checked) next.add(placeId)
+    else next.delete(placeId)
+    onSelect(next)
+  }
+
   return (
     <div className="flex-1 overflow-auto">
       <table className="w-full border-collapse text-left">
         <thead className="sticky top-0 z-10">
           <tr className="border-b border-rule-strong bg-ground">
-            {COLUMNS.map((column) => {
+            {COLUMNS.map((column, columnIndex) => {
               const active = column.key && sort.key === column.key
               return (
                 <th
-                  key={column.label || 'actions'}
+                  key={column.label || `col-${columnIndex}`}
                   scope="col"
                   aria-sort={
                     active ? (sort.desc ? 'descending' : 'ascending') : undefined
                   }
                   className={`label px-2 py-1.5 font-semibold ${column.className}`}
                 >
-                  {column.key ? (
+                  {columnIndex === 0 ? (
+                    <Checkbox
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      disabled={rows.length === 0}
+                      onChange={(checked) =>
+                        onSelect(
+                          checked ? new Set(rows.map((row) => row.providerPlaceId)) : new Set(),
+                        )
+                      }
+                      label={allSelected ? 'Clear selection' : 'Select every result'}
+                    />
+                  ) : column.key ? (
                     <button
                       type="button"
                       onClick={() => toggle(column)}
@@ -139,6 +177,7 @@ export function ResultsTable({ rows, running }: { rows: SearchRow[]; running: bo
         <tbody className="divide-y divide-rule">
           {sorted.map((row, index) => {
             const saved = Boolean(row.savedLeadId)
+            const ticked = selected.has(row.providerPlaceId)
             return (
               <tr
                 key={row.providerPlaceId}
@@ -146,13 +185,24 @@ export function ResultsTable({ rows, running }: { rows: SearchRow[]; running: bo
                 // a page lands. Re-sorting reorders the same keys and stays still.
                 className={`tick group transition-colors ${
                   saved ? 'text-ink-faint' : 'text-ink-dim'
-                } hover:bg-raise`}
+                } ${ticked ? 'bg-raise' : ''} hover:bg-raise`}
               >
                 <td
-                  className={`px-2 py-1.5 text-right font-data text-micro text-ink-faint ${
+                  className={`py-1.5 pl-3 ${
+                    // The saved rule moves to the selection column now that it is
+                    // the leftmost thing in the row; the mark still means the
+                    // same and still sits on the row's edge.
                     saved ? 'border-l border-signal' : 'border-l border-transparent'
                   }`}
                 >
+                  <Checkbox
+                    checked={ticked}
+                    onChange={(checked) => toggleRow(row.providerPlaceId, checked)}
+                    label={`Select ${row.name ?? 'this business'}`}
+                  />
+                </td>
+
+                <td className="px-2 py-1.5 text-right font-data text-micro text-ink-faint">
                   {index + 1}
                 </td>
 

@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 
 import { IconCeiling } from '@/components/icons'
 import { CostReadout } from '@/components/search/cost-readout'
 import { ResultsTable } from '@/components/search/results-table'
+import { SaveBar } from '@/components/search/save-bar'
 import { SearchForm } from '@/components/search/search-form'
 import { useSearchStream } from '@/components/search/use-search-stream'
 import { StatusStrip } from '@/components/shell/status-strip'
@@ -31,10 +32,19 @@ function age(iso: string): string {
 }
 
 export function SearchConsole({ initialBudget }: { initialBudget: BudgetState }) {
-  const { state, run, cancel, setBudget } = useSearchStream(initialBudget)
+  const { state, run, cancel, setBudget, markSaved } = useSearchStream(initialBudget)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const running = state.status === 'running'
 
-  const onSubmit = useCallback((input: SearchInput) => void run(input), [run])
+  const onSubmit = useCallback(
+    (input: SearchInput) => {
+      // A new search invalidates the old selection. Carrying ticks across two
+      // result sets would let the operator save businesses he can no longer see.
+      setSelected(new Set())
+      void run(input)
+    },
+    [run],
+  )
 
   const detail = (() => {
     if (state.rows.length === 0) return running ? 'Fetching…' : 'No fetch this session'
@@ -90,6 +100,19 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
         </div>
       ) : null}
 
+      {/*
+        Between the strip and the rows: the selection is made below it and acted
+        on here, so the bar sits where the eye already is rather than at the
+        bottom of a sixty-row table.
+      */}
+      <SaveBar
+        rows={state.rows}
+        selected={selected}
+        onSelect={setSelected}
+        searchId={state.searchId}
+        onSaved={markSaved}
+      />
+
       {state.status === 'error' ? (
         <ErrorState
           headline="Search failed"
@@ -97,7 +120,12 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
           detail={state.error ?? undefined}
         />
       ) : state.rows.length > 0 ? (
-        <ResultsTable rows={state.rows} running={running} />
+        <ResultsTable
+          rows={state.rows}
+          running={running}
+          selected={selected}
+          onSelect={setSelected}
+        />
       ) : running ? (
         <LoadingRows rows={14} label="Fetching results" />
       ) : (
