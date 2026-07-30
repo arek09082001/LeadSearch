@@ -95,3 +95,63 @@ export function IconExit(props: IconProps) {
     </Svg>
   )
 }
+
+/** Clear: two rules struck through each other. */
+export function IconClose(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3.5 3.5 12.5 12.5" />
+      <path d="M12.5 3.5 3.5 12.5" />
+    </Svg>
+  )
+}
+
+/** Disclosure: a tick pointing at what opens. */
+export function IconChevronDown(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M3.5 6 8 10.5 12.5 6" />
+    </Svg>
+  )
+}
+
+/** Leaving the instrument: a rule out of a bracket. */
+export function IconExternal(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M7.5 3.5h-5v9h9v-5" />
+      <path d="M9.5 2.5h4v4" />
+      <path d="M13.5 2.5 7.5 8.5" />
+    </Svg>
+  )
+}
+
+/** Save to the book: adding a record. */
+export function IconPlus(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2.5v11" />
+      <path d="M2.5 8h11" />
+    </Svg>
+  )
+}
+
+/** Already filed: a mark against a record. */
+export function IconCheck(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 8.5 6 12l7.5-8" />
+    </Svg>
+  )
+}
+
+/** The ceiling: a hard stop, not a warning. */
+export function IconCeiling(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M1.5 3.5h13" />
+      <path d="M8 13.5V6.5" />
+      <path d="M5 9.5 8 6.5l3 3" />
+    </Svg>
+  )
+}
