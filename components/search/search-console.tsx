@@ -1,23 +1,21 @@
 'use client'
 
-import { useCallback, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { IconAlert, IconCeiling } from '@/components/icons'
+import { IconAlert, IconCeiling, IconMap } from '@/components/icons'
 import { CostReadout } from '@/components/search/cost-readout'
-import {
-  RANK_SORT,
-  ResultsTable,
-  nextSort,
-  sortRows,
-  type SortKey,
-} from '@/components/search/results-table'
+import { useFeed, useFeedActions } from '@/components/search/feed-store'
+import { ResultsTable } from '@/components/search/results-table'
 import { SaveBar } from '@/components/search/save-bar'
 import { SearchForm } from '@/components/search/search-form'
-import { useSearchStream } from '@/components/search/use-search-stream'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/ui/states'
 import { useListKeys } from '@/components/ui/use-list-keys'
 import { useRowSelection } from '@/components/ui/use-row-selection'
+import { formatRadius } from '@/lib/map/geometry'
+import { formatPlaceType } from '@/lib/places-types'
+import { nextSort, sortRows, type SortKey } from '@/lib/search/sort'
 import type { BudgetState, SearchInput } from '@/lib/search/types'
 
 /*
@@ -28,6 +26,13 @@ import type { BudgetState, SearchInput } from '@/lib/search/types'
  * The cost readout sits ABOVE the strip deliberately — on a $0 ceiling it is
  * the thing most likely to stop a session, so it must never be below the fold
  * of attention.
+ *
+ * The rows are not this surface's property. They come from the feed store,
+ * which the map writes into as well, so a search bought at a point on the map
+ * is already drawn here in full when the operator arrives — same rows, same
+ * ticks, same order, no second call to Google. What this file owns is the
+ * drawing: nine columns and sortable headers, which is what a decision about
+ * thirty businesses actually needs and what a map can never be.
  */
 
 function age(iso: string): string {
@@ -40,12 +45,18 @@ function age(iso: string): string {
 }
 
 export function SearchConsole({ initialBudget }: { initialBudget: BudgetState }) {
-  const { state, run, cancel, setBudget, markSaved } = useSearchStream(initialBudget)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [sort, setSort] = useState(RANK_SORT)
+  const state = useFeed()
+  const { run, cancel, setBudget, hydrateBudget, markSaved, setSelected, setSort } = useFeedActions()
+  const { selected, sort } = state
   /** Where the keyboard is in the table. -1 is nowhere, which is where it starts. */
   const [cursor, setCursor] = useState(-1)
   const running = state.status === 'running'
+
+  // This page just read the ledger on the server, so it is the freshest one
+  // anybody has — unless a run is in flight, which the store knows about.
+  useEffect(() => {
+    hydrateBudget(initialBudget)
+  }, [initialBudget, hydrateBudget])
 
   /*
    * The sort lives here rather than in the table for the same reason the
@@ -63,11 +74,10 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
 
   const onSubmit = useCallback(
     (input: SearchInput) => {
-      // A new search invalidates the old selection. Carrying ticks across two
-      // result sets would let the operator save businesses he can no longer see.
-      setSelected(new Set())
+      // The ticks are dropped by the store, where the rows they name are
+      // dropped. The cursor is this surface's own and is cleared here.
       setCursor(-1)
-      void run(input)
+      void run(input, 'search')
     },
     [run],
   )
@@ -94,21 +104,64 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
     return `${count} · fetched just now`
   })()
 
+  /*
+   * Whose question this table is answering.
+   *
+   * These rows outlive the surface that bought them now, so a table full of
+   * results with an empty form above it is an ordinary thing to walk into —
+   * and unexplained it reads as a search the operator does not remember
+   * running. The question is stated rather than typed back into the form: the
+   * map's search is a circle on the ground, this form has no way to hold one,
+   * and prefilling it with the words alone would leave a Search button that
+   * quietly means something else and costs money to find out.
+   */
+  const asked = (() => {
+    const input = state.input
+    if (!input || state.origin !== 'map') return null
+    const words = [input.query, input.category ? formatPlaceType(input.category) : null].filter(
+      Boolean,
+    )
+    const where = input.radiusM ? `within ${formatRadius(input.radiusM)} of a point` : 'at a point'
+    return `${words.join(' · ') || 'Everything'} — ${where} on the map`
+  })()
+
   return (
     <>
       <SearchForm onSubmit={onSubmit} onCancel={cancel} running={running} />
 
-      {state.budget ? (
-        <CostReadout
-          budget={state.budget}
-          searchCostUsd={state.searchCostUsd}
-          requests={state.requests}
-          estimateUsd={state.estimateUsd}
-          onCeilingChange={setBudget}
-        />
-      ) : null}
+      {/* Never absent on this surface: the page refuses to render without a
+          ceiling, and the store's copy only takes over once it has one. */}
+      <CostReadout
+        budget={state.budget ?? initialBudget}
+        searchCostUsd={state.searchCostUsd}
+        requests={state.requests}
+        estimateUsd={state.estimateUsd}
+        onCeilingChange={setBudget}
+      />
 
       <StatusStrip provenance="live" detail={detail}>
+        {asked ? (
+          <span className="hidden truncate font-data text-micro text-ink-faint xl:inline">
+            {asked}
+          </span>
+        ) : null}
+
+        {/*
+          The same rows, back on the field. Not a second search and not a
+          second copy: both surfaces draw the one feed, so this is the same
+          hand-off the rail offers in the other direction.
+        */}
+        {state.rows.some((row) => row.lat !== null && row.lng !== null) ? (
+          <Link
+            href="/map"
+            title="Draw these same results as marks on the map. No new search, no cost."
+            className="label flex shrink-0 items-center gap-1.5 text-ink-faint transition-colors hover:text-signal"
+          >
+            <IconMap className="size-3" />
+            On the map
+          </Link>
+        ) : null}
+
         {state.rows.length > 0 ? (
           <span className="hidden font-data text-micro text-ink-faint lg:inline">
             j/k move · x tick · ⇧j/k run · a all
@@ -196,7 +249,7 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
           selected={selected}
           selection={selection}
           sort={sort}
-          onSort={(key: SortKey) => setSort((prev) => nextSort(prev, key))}
+          onSort={(key: SortKey) => setSort(nextSort(sort, key))}
           cursor={cursorIndex}
           onCursor={setCursor}
         />

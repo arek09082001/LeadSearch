@@ -24,6 +24,11 @@ import type { SearchRow } from '@/lib/search/types'
  * It is deliberately not the lead's page. Name, score, what is broken, a number
  * to ring: enough to decide whether this is the call to make next. The page
  * itself is one click away and is where the evidence lives.
+ *
+ * It draws its content and NOT its container. The rail beside the field holds
+ * two things — this, and the feed's rows — and how the height is divided
+ * between them is one decision that has to be taken in one place. See
+ * `components/map/map-rail`.
  */
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -325,23 +330,13 @@ export function MapPanel({
   onToggleResult: () => void
   onClose: () => void
 }) {
-  if (!point && !result) return null
+  if (result) {
+    return (
+      <ResultBody row={result} selected={selected} onToggle={onToggleResult} onClose={onClose} />
+    )
+  }
 
-  return (
-    <aside
-      aria-label="The mark you selected"
-      className="max-h-[46vh] shrink-0 overflow-y-auto border-t border-rule bg-ground lg:max-h-none lg:w-[19rem] lg:border-t-0 lg:border-l"
-    >
-      {result ? (
-        <ResultBody
-          row={result}
-          selected={selected}
-          onToggle={onToggleResult}
-          onClose={onClose}
-        />
-      ) : point ? (
-        <LeadBody point={point} onClose={onClose} />
-      ) : null}
-    </aside>
-  )
+  if (point) return <LeadBody point={point} onClose={onClose} />
+
+  return null
 }

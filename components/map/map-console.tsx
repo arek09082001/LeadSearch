@@ -9,12 +9,11 @@ import { FilterBar } from '@/components/leads/filter-bar'
 import { SavedViews } from '@/components/leads/saved-views'
 import { MapLegend } from '@/components/map/map-legend'
 import { MapPanel } from '@/components/map/map-panel'
+import { MapRail } from '@/components/map/map-rail'
 import { MapSearch } from '@/components/map/map-search'
-import { ResultsDrawer } from '@/components/map/results-drawer'
 import { CostReadout } from '@/components/search/cost-readout'
-import { RANK_SORT, sortRows } from '@/components/search/results-table'
+import { useFeed, useFeedActions, type FeedState } from '@/components/search/feed-store'
 import { SaveBar } from '@/components/search/save-bar'
-import { useSearchStream } from '@/components/search/use-search-stream'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { useListKeys } from '@/components/ui/use-list-keys'
 import { useRowSelection } from '@/components/ui/use-row-selection'
@@ -30,7 +29,8 @@ import type {
 } from '@/lib/leads/types'
 import type { Point } from '@/lib/map/geometry'
 import { formatPlaceType } from '@/lib/places-types'
-import type { BudgetState } from '@/lib/search/types'
+import { sortRows } from '@/lib/search/sort'
+import type { BudgetState, SearchInput } from '@/lib/search/types'
 
 /*
  * The map, assembled.
@@ -46,6 +46,13 @@ import type { BudgetState } from '@/lib/search/types'
  * The map itself is loaded on the client only. MapLibre reaches for `window`
  * and a WebGL context the moment it is constructed, and there is nothing for a
  * server render to produce anyway — a canvas prerenders to an empty box.
+ *
+ * The FEED is not held here. It lives in `components/search/feed-store`, which
+ * both this surface and `/search` read, so a search bought at a point survives
+ * being taken to the full table and back — and so the rows, the ticks and the
+ * order are one set of facts rather than two copies that drift. What this file
+ * owns of the feed is only how it is DRAWN: green marks on the field, and a
+ * rail beside it.
  */
 
 const LeadsMap = dynamic(
@@ -93,6 +100,18 @@ function pad(bounds: LeadBounds): LeadBounds {
   }
 }
 
+/**
+ * The last run's question, but only if this surface is the one that asked it.
+ *
+ * A search bought on `/search` is a place name and a radius around whatever
+ * Google decided that meant; it has no point on the ground for this map to draw
+ * a ring at, and adopting its words as though they were asked here would put a
+ * circle on the field the operator never drew.
+ */
+function mapInput(feed: FeedState): SearchInput | null {
+  return feed.origin === 'map' ? feed.input : null
+}
+
 function covers(outer: LeadBounds, inner: LeadBounds): boolean {
   if (outer.west > outer.east || inner.west > inner.east) return false
   return (
@@ -134,14 +153,37 @@ export function MapConsole({
 
   /* --- The feed --------------------------------------------------------- */
 
-  const { state, run, cancel, setBudget, markSaved } = useSearchStream(initialBudget)
-  const [center, setCenter] = useState<Point | null>(null)
-  const [radiusM, setRadiusM] = useState(DEFAULT_RADIUS_M)
-  const [category, setCategory] = useState('')
-  const [words, setWords] = useState('')
-  const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set())
-  const [sort, setSort] = useState(RANK_SORT)
-  /** Where the keyboard is in the results drawer. -1 is nowhere, where it starts. */
+  const state = useFeed()
+  const { run, cancel, setBudget, hydrateBudget, markSaved, setSelected, setSort } = useFeedActions()
+  const selectedResults = state.selected
+  const sort = state.sort
+
+  /*
+   * The ledger this page render just read beats whatever the store was
+   * carrying from the last surface. Null means it could not be read at all,
+   * which is the band below, not a reason to forget a ceiling we do know.
+   */
+  useEffect(() => {
+    hydrateBudget(initialBudget)
+  }, [initialBudget, hydrateBudget])
+
+  /*
+   * The question that bought the rows, restored from them.
+   *
+   * A search on this surface is a circle on the ground, and the circle is not
+   * in the URL — deliberately, for the reason `LeadBounds` is not. So when the
+   * operator comes back from the table, the centre is taken from the run the
+   * store still holds rather than left blank under its own results, which
+   * would read as a ring that had been forgotten.
+   *
+   * Lazily, on mount only: after that this is his to move, and a later render
+   * must not drag it back to where the last search happened to be.
+   */
+  const [center, setCenter] = useState<Point | null>(() => mapInput(state)?.center ?? null)
+  const [radiusM, setRadiusM] = useState(() => mapInput(state)?.radiusM ?? DEFAULT_RADIUS_M)
+  const [category, setCategory] = useState(() => mapInput(state)?.category ?? '')
+  const [words, setWords] = useState(() => mapInput(state)?.query ?? '')
+  /** Where the keyboard is in the rail. -1 is nowhere, where it starts. */
   const [cursor, setCursor] = useState(-1)
   const [listOpen, setListOpen] = useState(true)
 
@@ -276,7 +318,7 @@ export function MapConsole({
   const selection = useRowSelection({
     ids: resultIds,
     selected: selectedResults,
-    onSelect: setSelectedResults,
+    onSelect: setSelected,
   })
 
   // A page arriving mid-stream only ever appends, so a cursor stays where it
@@ -293,14 +335,18 @@ export function MapConsole({
     [points],
   )
 
-  const toggleResult = useCallback((placeId: string) => {
-    setSelectedResults((previous) => {
-      const next = new Set(previous)
+  const toggleResult = useCallback(
+    (placeId: string) => {
+      // Read straight off the store rather than closing over the render's copy:
+      // this one is handed to the map through a ref that outlives the render it
+      // was made in, and a stale set here would silently un-tick rows.
+      const next = new Set(useFeed.getState().selected)
       if (next.has(placeId)) next.delete(placeId)
       else next.add(placeId)
-      return next
-    })
-  }, [])
+      setSelected(next)
+    },
+    [setSelected],
+  )
 
   /** Read a result without deciding about it. What ⏎ in the drawer does. */
   const readResult = useCallback((placeId: string) => {
@@ -336,9 +382,8 @@ export function MapConsole({
     (refresh: boolean) => {
       const text = words.trim()
       if (!center || (!category && !text)) return
-      // A new result set invalidates the old ticks, exactly as on the search
-      // surface: they would otherwise save businesses no longer on screen.
-      setSelectedResults(new Set())
+      // The ticks are dropped by the store, which is where the rows they name
+      // are dropped. What is local to this surface is cleared here.
       setFocusResultId(null)
       setCursor(-1)
       // A search is the one thing that is meant to fill this, so it opens.
@@ -349,16 +394,16 @@ export function MapConsole({
        * fold a place name into the text as well, which is the geocoding this
        * whole surface exists to avoid paying for.
        */
-      void run({ query: text, category: category || undefined, center, radiusM, refresh })
+      void run({ query: text, category: category || undefined, center, radiusM, refresh }, 'map')
     },
     [center, category, words, radiusM, run],
   )
 
   /*
-   * The drawer's keyboard: the same j/k/x/⇧j/a the book's table has.
+   * The rail's keyboard: the same j/k/x/⇧j/a the book's table has.
    *
-   * `count` is zero while the drawer is shut, which is what silently unbinds
-   * every one of these — pressing `j` over a closed drawer must move nothing.
+   * `count` is zero while the list is collapsed, which is what silently unbinds
+   * every one of these — pressing `j` over a hidden list must move nothing.
    * `onEscape` is deliberately not passed: Escape on this surface has four
    * things to undo in order, and that ordering lives in one place below rather
    * than being split across two listeners that would both fire.
@@ -394,7 +439,7 @@ export function MapConsole({
         else if (focusLead || focusResultId) {
           setFocusLead(null)
           setFocusResultId(null)
-        } else if (selectedResults.size) setSelectedResults(new Set())
+        } else if (selectedResults.size) setSelected(new Set())
         else if (cursor >= 0) setCursor(-1)
         else if (center) setCenter(null)
         return
@@ -414,7 +459,7 @@ export function MapConsole({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [naming, focusLead, focusResultId, selectedResults, cursor, center, filters, views])
+  }, [naming, focusLead, focusResultId, selectedResults, cursor, center, filters, views, setSelected])
 
   const focusResult = focusResultId
     ? (state.rows.find((row) => row.providerPlaceId === focusResultId) ?? null)
@@ -470,9 +515,18 @@ export function MapConsole({
         surface you can leave open for an hour, and the one number that has to
         remain true the whole time is what is left of the ceiling.
       */}
-      {state.budget ? (
+      {initialBudget ? (
         <CostReadout
-          budget={state.budget}
+          /*
+            Keyed on the ledger THIS page render read, not on whatever the
+            store is carrying. The store may still hold a perfectly good
+            ceiling from the search surface while the read behind this render
+            failed — and drawing a receipt beside a search panel that is not
+            there, with no word about why, is the one thing this band exists to
+            prevent. `initialBudget` is the fallback rather than the source
+            because a run in flight knows more recent totals than any render.
+          */
+          budget={state.budget ?? initialBudget}
           searchCostUsd={state.searchCostUsd}
           requests={state.requests}
           estimateUsd={state.estimateUsd}
@@ -567,11 +621,11 @@ export function MapConsole({
         thing to get right.
       */}
       <SaveBar
-        // The drawn order, so a preset here and a range in the drawer below are
-        // both talking about the same list.
+        // The drawn order, so a preset here and a range in the rail beside the
+        // field are both talking about the same list.
         rows={resultRows}
         selected={selectedResults}
-        onSelect={setSelectedResults}
+        onSelect={setSelected}
         searchId={state.searchId}
         onSaved={(items) => {
           markSaved(items)
@@ -583,14 +637,23 @@ export function MapConsole({
         }}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      {/*
+        The field, and the rail beside it.
+
+        `relative` is load-bearing below `lg`, where the rail has no width to
+        take and rests on the bottom of the field as a sheet instead. It is
+        positioned against this row rather than against the map alone so that
+        the sheet and the column are one element with one set of contents —
+        two copies of the same rail, shown at different breakpoints, is how the
+        panel and the list drift apart.
+      */}
+      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
         {/*
-          The field and its drawer stack; the overlays are positioned against
-          the field alone, so the legend keeps sitting on the map rather than
-          over a table of rows.
+          The field, which now keeps every pixel of its height. The overlays are
+          positioned against this box, so the search panel and the legend sit on
+          the map rather than over the rows beside it.
         */}
-        <div className="flex min-h-[22rem] flex-1 flex-col">
-          <div className="relative flex min-h-0 flex-1 flex-col">
+        <div className="relative flex min-h-[24rem] flex-1 flex-col">
           <LeadsMap
             points={points}
             results={state.rows}
@@ -644,41 +707,52 @@ export function MapConsole({
                   : 'No saved lead in this view. Zoom out, or search here to find some.'}
             </p>
           ) : null}
-          </div>
-
-          {/*
-            The feed as rows, under the field.
-
-            A map answers "where are they" and is a poor instrument for "take
-            these eleven": a dot carries no name, no rating and no website
-            column to sort on, and ticking thirty of them is thirty chances to
-            miss. One selection is shared between the two, so a mark clicked on
-            the field is a row ticked here and a run taken here lights up there.
-          */}
-          <ResultsDrawer
-            rows={resultRows}
-            selected={selectedResults}
-            selection={selection}
-            sort={sort}
-            onSort={setSort}
-            cursor={cursorIndex}
-            onCursor={setCursor}
-            running={state.status === 'running'}
-            cachedAt={state.cachedAt}
-            open={listOpen}
-            onOpen={setListOpen}
-          />
         </div>
 
-        <MapPanel
-          point={focusLead}
-          result={focusResult}
-          selected={focusResultId ? selectedResults.has(focusResultId) : false}
-          onToggleResult={() => focusResultId && toggleResult(focusResultId)}
-          onClose={() => {
-            setFocusLead(null)
-            setFocusResultId(null)
-          }}
+        {/*
+          The feed as rows, and whatever is being read, in one column.
+
+          A map answers "where are they" and is a poor instrument for "take
+          these eleven": a dot carries no name, no rating and no website to sort
+          on, and ticking thirty of them is thirty chances to miss. One
+          selection is shared between the two, so a mark clicked on the field is
+          a row ticked here, and a run taken here lights up there.
+
+          Beside the field rather than under it, because height is the only
+          dimension a map cannot spare. See `map-rail`.
+        */}
+        <MapRail
+          rows={resultRows}
+          selected={selectedResults}
+          selection={selection}
+          sort={sort}
+          onSort={setSort}
+          cursor={cursorIndex}
+          onCursor={setCursor}
+          running={state.status === 'running'}
+          cachedAt={state.cachedAt}
+          center={center}
+          focusedResultId={focusResultId}
+          onRead={readResult}
+          open={listOpen}
+          onOpen={setListOpen}
+          panel={
+            // The element itself, not the emptiness of it: the rail divides its
+            // height between two things and has to know whether it is holding
+            // one or both before it draws either.
+            focusLead || focusResult ? (
+              <MapPanel
+                point={focusLead}
+                result={focusResult}
+                selected={focusResultId ? selectedResults.has(focusResultId) : false}
+                onToggleResult={() => focusResultId && toggleResult(focusResultId)}
+                onClose={() => {
+                  setFocusLead(null)
+                  setFocusResultId(null)
+                }}
+              />
+            ) : null
+          }
         />
       </div>
     </>
