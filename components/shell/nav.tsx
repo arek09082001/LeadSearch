@@ -4,13 +4,22 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect } from 'react'
 
-import { IconBook, IconMap, IconSearch, IconSignal } from '@/components/icons'
+import { IconBook, IconFork, IconMap, IconSearch, IconSignal } from '@/components/icons'
 
+/*
+ * Working order, left to right: find them, keep them, look at where they are,
+ * call them — and then, last and least often, ask whether any of it was ranked
+ * right. Map sits beside Leads because the two are one question drawn twice,
+ * not two questions. Outcomes sits at the end because it is the one surface that
+ * is not part of a session; it is read between sessions, after enough calls have
+ * accumulated to mean something.
+ */
 export const SURFACES = [
   { href: '/search', label: 'Search', key: '1', Icon: IconSearch },
   { href: '/leads', label: 'Leads', key: '2', Icon: IconBook },
   { href: '/map', label: 'Map', key: '3', Icon: IconMap },
   { href: '/outreach', label: 'Outreach', key: '4', Icon: IconSignal },
+  { href: '/outcomes', label: 'Outcomes', key: '5', Icon: IconFork },
 ] as const
 
 /**
@@ -20,8 +29,9 @@ export const SURFACES = [
  * map shares the library's state: filters live in the URL, both routes parse
  * them with `parseFilters`, so "narrow it in the table, then look at it on the
  * map" is one click and not a second filtering. Coming from anywhere else —
- * Search, Outreach — the link is bare, because a query string from a surface
- * that does not use these filters would be noise carried into one that does.
+ * Search, Outreach, Outcomes — the link is bare, because a query string from a
+ * surface that does not use these filters would be noise carried into one that
+ * does.
  */
 const BOOK_SURFACES = new Set<string>(['/leads', '/map'])
 
@@ -64,19 +74,21 @@ export function Nav() {
             href={hrefFor(href)}
             aria-current={active ? 'page' : undefined}
             className={[
-              'group relative flex items-center gap-1.5 px-2 py-2 transition-colors duration-150',
+              'group relative flex items-center gap-1.5 px-1.5 py-2 transition-colors duration-150',
               'md:gap-2 md:px-3',
               active ? 'text-ink' : 'text-ink-faint hover:text-ink-dim',
             ].join(' ')}
           >
-            <Icon className="size-3.5 shrink-0" />
             {/*
-              Four surfaces now rather than three, and a phone is 360px wide.
-              The label on the inactive ones is the first thing that can go: the
-              icon still says which is which, and the active surface keeps its
-              word because that is the one the operator is checking.
+              The glyph is the last thing on this rule that can be spared, and at
+              five surfaces it has to be. DESIGN.md fixes the order of what drops
+              on a phone — the wordmark, then the key hints — and fixes what never
+              does: the surface label. Labels plus icons run past 360px and push
+              the sign-out control off the edge, so below `md` the icons go and
+              every surface stays named and reachable.
             */}
-            <span className={`label ${active ? '' : 'hidden sm:inline'}`}>{label}</span>
+            <Icon className="hidden size-3.5 shrink-0 md:block" />
+            <span className="label">{label}</span>
             {/* The key hint is for the desk, where a keyboard exists. */}
             <span
               aria-hidden="true"

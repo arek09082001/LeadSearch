@@ -1,9 +1,9 @@
 'use client'
 
-import { useMemo, useState } from 'react'
-
 import { IconChevronDown, IconExternal } from '@/components/icons'
-import { Checkbox } from '@/components/ui/controls'
+import { Checkbox, SelectionCell } from '@/components/ui/controls'
+import { cursorProps } from '@/components/ui/use-list-keys'
+import type { RowSelection } from '@/components/ui/use-row-selection'
 import { formatPlaceType } from '@/lib/places-types'
 import type { SearchRow } from '@/lib/search/types'
 
@@ -28,7 +28,15 @@ import type { SearchRow } from '@/lib/search/types'
  * something actually breaks.
  */
 
-type SortKey = 'rank' | 'name' | 'rating' | 'reviews' | 'web'
+export type SortKey = 'rank' | 'name' | 'rating' | 'reviews' | 'web'
+
+export interface SortState {
+  key: SortKey
+  desc: boolean
+}
+
+/** Google's own order, which is the order the operator asked for. */
+export const RANK_SORT: SortState = { key: 'rank', desc: false }
 
 interface Column {
   key: SortKey | null
@@ -62,64 +70,77 @@ function hostname(url: string): string {
   }
 }
 
+/**
+ * The rows in the order they are drawn.
+ *
+ * Lifted out of the component with the sort state, because the row ORDER is
+ * what a range selection and a keyboard cursor are both expressed in — the
+ * surface that owns those has to own this, or "the eight rows between these
+ * two" means one thing to the table and another to everything else.
+ */
+export function sortRows(rows: SearchRow[], sort: SortState): SearchRow[] {
+  const copy = rows.map((row, index) => ({ row, index }))
+  const direction = sort.desc ? -1 : 1
+
+  copy.sort((a, b) => {
+    switch (sort.key) {
+      case 'name':
+        return direction * (a.row.name ?? '').localeCompare(b.row.name ?? '', 'de')
+      case 'rating':
+        // No rating is not a zero rating; unrated businesses sink either way
+        // rather than pretending to be the worst-reviewed in town.
+        return direction * ((a.row.rating ?? -1) - (b.row.rating ?? -1))
+      case 'reviews':
+        return direction * ((a.row.userRatingCount ?? -1) - (b.row.userRatingCount ?? -1))
+      case 'web':
+        // The one sort the product exists for: no-website first.
+        return direction * (Number(Boolean(a.row.website)) - Number(Boolean(b.row.website)))
+      default:
+        return direction * (a.index - b.index)
+    }
+  })
+
+  return copy.map((entry) => entry.row)
+}
+
+/** Clicking the active column flips it; a new one starts where it is useful. */
+export function nextSort(prev: SortState, key: SortKey): SortState {
+  if (prev.key === key) return { key, desc: !prev.desc }
+  return { key, desc: Boolean(COLUMNS.find((column) => column.key === key)?.descFirst) }
+}
+
+/*
+ * The cursor row, marked the way the book marks it — the system's own focus
+ * treatment rather than a third grey, since selection and hover already spend
+ * `raise` between them.
+ */
+const CURSOR_RING = '[outline:1px_solid_var(--color-signal)] [outline-offset:-1px]'
+
 export function ResultsTable({
   rows,
   running,
   selected,
-  onSelect,
+  selection,
+  sort,
+  onSort,
+  cursor,
+  onCursor,
 }: {
+  /** Already in the order they are drawn — see `sortRows`. */
   rows: SearchRow[]
   running: boolean
   /** Place ids currently ticked. Owned above, because the save bar acts on them. */
   selected: Set<string>
-  /** Replaces the whole selection — the caller decides what a click means. */
-  onSelect: (next: Set<string>) => void
+  /** Every way a row can be ticked. Owned above, with the keyboard. */
+  selection: RowSelection
+  sort: SortState
+  onSort: (key: SortKey) => void
+  /** Row the keyboard is on. -1 when it is nowhere, which is where it starts. */
+  cursor: number
+  onCursor: (index: number) => void
 }) {
-  const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: 'rank', desc: false })
-
-  const sorted = useMemo(() => {
-    const copy = rows.map((row, index) => ({ row, index }))
-    const direction = sort.desc ? -1 : 1
-
-    copy.sort((a, b) => {
-      switch (sort.key) {
-        case 'name':
-          return direction * (a.row.name ?? '').localeCompare(b.row.name ?? '', 'de')
-        case 'rating':
-          // No rating is not a zero rating; unrated businesses sink either way
-          // rather than pretending to be the worst-reviewed in town.
-          return direction * ((a.row.rating ?? -1) - (b.row.rating ?? -1))
-        case 'reviews':
-          return direction * ((a.row.userRatingCount ?? -1) - (b.row.userRatingCount ?? -1))
-        case 'web':
-          // The one sort the product exists for: no-website first.
-          return direction * (Number(Boolean(a.row.website)) - Number(Boolean(b.row.website)))
-        default:
-          return direction * (a.index - b.index)
-      }
-    })
-
-    return copy.map((entry) => entry.row)
-  }, [rows, sort])
-
-  function toggle(column: Column) {
-    if (!column.key) return
-    setSort((prev) =>
-      prev.key === column.key
-        ? { key: prev.key, desc: !prev.desc }
-        : { key: column.key!, desc: Boolean(column.descFirst) },
-    )
-  }
-
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.providerPlaceId))
   const someSelected = !allSelected && rows.some((row) => selected.has(row.providerPlaceId))
-
-  function toggleRow(placeId: string, checked: boolean) {
-    const next = new Set(selected)
-    if (checked) next.add(placeId)
-    else next.delete(placeId)
-    onSelect(next)
-  }
 
   return (
     <div className="flex-1 overflow-auto">
@@ -135,6 +156,11 @@ export function ResultsTable({
                   aria-sort={
                     active ? (sort.desc ? 'descending' : 'ascending') : undefined
                   }
+                  title={
+                    columnIndex === 0
+                      ? 'a — every result. Shift-click or drag a box below to take a run.'
+                      : undefined
+                  }
                   className={`label px-2 py-1.5 font-semibold ${column.className}`}
                 >
                   {columnIndex === 0 ? (
@@ -142,17 +168,13 @@ export function ResultsTable({
                       checked={allSelected}
                       indeterminate={someSelected}
                       disabled={rows.length === 0}
-                      onChange={(checked) =>
-                        onSelect(
-                          checked ? new Set(rows.map((row) => row.providerPlaceId)) : new Set(),
-                        )
-                      }
+                      onChange={(checked) => selection.setAll(checked)}
                       label={allSelected ? 'Clear selection' : 'Select every result'}
                     />
                   ) : column.key ? (
                     <button
                       type="button"
-                      onClick={() => toggle(column)}
+                      onClick={() => onSort(column.key!)}
                       className={`label inline-flex items-center gap-1 transition-colors ${
                         active ? 'text-signal' : 'text-ink-faint hover:text-ink-dim'
                       }`}
@@ -175,32 +197,37 @@ export function ResultsTable({
         </thead>
 
         <tbody className="divide-y divide-rule">
-          {sorted.map((row, index) => {
+          {rows.map((row, index) => {
             const saved = Boolean(row.savedLeadId)
             const ticked = selected.has(row.providerPlaceId)
+            const cursored = index === cursor
             return (
               <tr
                 key={row.providerPlaceId}
+                {...cursorProps(cursored)}
+                // Clicking anywhere in a row is also how the cursor is moved, so
+                // the mouse and the keyboard share one notion of "this one".
+                onPointerDown={() => onCursor(index)}
                 // `tick` fires once on mount, so only genuinely new rows flash as
                 // a page lands. Re-sorting reorders the same keys and stays still.
                 className={`tick group transition-colors ${
                   saved ? 'text-ink-faint' : 'text-ink-dim'
-                } ${ticked ? 'bg-raise' : ''} hover:bg-raise`}
+                } ${ticked ? 'bg-raise' : ''} ${
+                  cursored ? `bg-raise ${CURSOR_RING}` : ''
+                } hover:bg-raise`}
               >
-                <td
-                  className={`py-1.5 pl-3 ${
+                <SelectionCell
+                  index={index}
+                  selection={selection}
+                  checked={ticked}
+                  label={`Select ${row.name ?? 'this business'}`}
+                  className={
                     // The saved rule moves to the selection column now that it is
                     // the leftmost thing in the row; the mark still means the
                     // same and still sits on the row's edge.
                     saved ? 'border-l border-signal' : 'border-l border-transparent'
-                  }`}
-                >
-                  <Checkbox
-                    checked={ticked}
-                    onChange={(checked) => toggleRow(row.providerPlaceId, checked)}
-                    label={`Select ${row.name ?? 'this business'}`}
-                  />
-                </td>
+                  }
+                />
 
                 <td className="px-2 py-1.5 text-right font-data text-micro text-ink-faint">
                   {index + 1}

@@ -16,9 +16,16 @@ import { useEffect } from 'react'
  * operator is typing: a `j` in the search field is a letter, and treating it as
  * a movement is the single way a keymap like this becomes unusable.
  *
- *   j / ↓   next row          enter   open the focused lead
- *   k / ↑   previous row      s       save what this surface saves
- *   /       focus the filter  escape  give the keyboard back
+ *   j / ↓   next row            x       tick the row the cursor is on
+ *   k / ↑   previous row        ⇧j / ⇧k extend the tick to the next row
+ *   enter   open the focused    a       tick every row, or none
+ *   s       save what this      escape  give the keyboard back
+ *           surface saves       /       focus the filter
+ *
+ * Shift is the modifier the selection gestures share with the mouse: ⇧j does to
+ * the keyboard exactly what shift+click does to the pointer, and both measure
+ * from the same anchor. It is deliberately not a fourth movement key — the
+ * cursor moves the way it always did, and shift only says "and take it".
  */
 
 const TYPING = 'input, textarea, select, [contenteditable]'
@@ -39,6 +46,9 @@ export function useListKeys({
   onSave,
   onSearch,
   onEscape,
+  onToggle,
+  onExtend,
+  onSelectAll,
 }: {
   count: number
   /** -1 when the cursor is nowhere, which is where it starts. */
@@ -50,6 +60,12 @@ export function useListKeys({
   onSearch?: () => void
   /** Dismiss whatever is open — selection, cursor, staged edit. */
   onEscape?: () => void
+  /** Tick or un-tick one row. */
+  onToggle?: (index: number) => void
+  /** Extend the tick from where the cursor was to where it now is. */
+  onExtend?: (to: number, from: number) => void
+  /** Everything, or nothing — the header box without reaching for it. */
+  onSelectAll?: () => void
 }) {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -78,17 +94,46 @@ export function useListKeys({
 
       switch (event.key) {
         case 'j':
-        case 'ArrowDown':
+        case 'J':
+        case 'ArrowDown': {
           if (!count) return
           event.preventDefault()
-          onCursor(cursor < 0 ? 0 : Math.min(count - 1, cursor + 1))
+          // A cursor that is nowhere lands on the first row rather than the
+          // second, so the first ⇧j takes row one instead of skipping it.
+          const from = cursor < 0 ? 0 : cursor
+          const to = cursor < 0 ? 0 : Math.min(count - 1, cursor + 1)
+          if (event.shiftKey) onExtend?.(to, from)
+          onCursor(to)
           break
+        }
 
         case 'k':
-        case 'ArrowUp':
+        case 'K':
+        case 'ArrowUp': {
           if (!count) return
           event.preventDefault()
-          onCursor(cursor <= 0 ? 0 : cursor - 1)
+          const from = cursor < 0 ? 0 : cursor
+          const to = cursor <= 0 ? 0 : cursor - 1
+          if (event.shiftKey) onExtend?.(to, from)
+          onCursor(to)
+          break
+        }
+
+        case 'x': {
+          // The Gmail key, and the reason the cursor exists at all on a surface
+          // whose rows are acted on in bulk.
+          if (!count || !onToggle) return
+          event.preventDefault()
+          const index = cursor < 0 ? 0 : cursor
+          onToggle(index)
+          onCursor(index)
+          break
+        }
+
+        case 'a':
+          if (!count || !onSelectAll) return
+          event.preventDefault()
+          onSelectAll()
           break
 
         case 'Enter':
@@ -119,7 +164,18 @@ export function useListKeys({
 
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
-  }, [count, cursor, onCursor, onOpen, onSave, onSearch, onEscape])
+  }, [
+    count,
+    cursor,
+    onCursor,
+    onOpen,
+    onSave,
+    onSearch,
+    onEscape,
+    onToggle,
+    onExtend,
+    onSelectAll,
+  ])
 
   /*
    * Keep the cursor on screen. Found in the DOM rather than through a ref per

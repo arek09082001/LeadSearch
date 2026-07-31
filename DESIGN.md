@@ -212,11 +212,9 @@ icon button that goes `alert` on hover.
 
 **Nav** — icon + `label` + key hint. The active surface is marked by a 1px `signal` rule
 along the bottom edge and `ink` text; inactive is `ink-faint`, hover `ink-dim`. It is a
-rule, never a pill or a fill. `Alt+1/2/3/4` jump between surfaces — `Alt` deliberately, so
-plain digits stay free for filter and search fields. Below `sm` the inactive labels drop and
-only their icons remain; the active one keeps its word, because that is the one being
-checked. Moving between Leads and Map carries the query string, since those two draw the
-same book and the filters are the URL.
+rule, never a pill or a fill. `Alt+1` to `Alt+5` jump between surfaces — `Alt` deliberately,
+so plain digits stay free for filter and search fields. Moving between Leads and Map carries
+the query string, since those two draw the same book and the filters are the URL.
 
 **Status strip** — a `panel` band: a 1.5px square dot (`live` green or `signal` amber), the
 provenance label, the explanatory sentence, and a right-aligned detail slot for age or
