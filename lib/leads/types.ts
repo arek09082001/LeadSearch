@@ -272,6 +272,64 @@ export interface LeadListing {
   pageSize: number
 }
 
+/* ------------------------------------------------------------------------- *
+ * The same library, drawn as points
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One lead as the map draws it, and nothing more.
+ *
+ * A deliberately smaller thing than `LeadRow`. The map draws points, not table
+ * rows: it needs somewhere to put the mark, something to label it with, and the
+ * two facts worth colouring it by. Everything else — the address, the audit
+ * measurements, the lists, the note count — is what the detail route is for, and
+ * shipping it for two thousand pins would be most of a megabyte nobody reads.
+ *
+ * The field names are `LeadRow`'s, not the view's, so a point and a row cannot
+ * disagree about what `score` or `auditFlags` mean.
+ */
+export interface LeadPoint {
+  id: string
+  lat: number
+  lng: number
+  name: string
+  score: number | null
+  status: LeadStatus
+  /** Rendered through the same vocabulary the table's marks come from. */
+  auditFlags: string[]
+}
+
+/**
+ * A viewport, in degrees.
+ *
+ * Not part of `LeadFilters`, and that is the point: filters say which leads
+ * exist, a viewport says which part of the world is on screen. Folding it in
+ * would put the map's scroll position into every saved view and every bookmarked
+ * URL, and a view named "Heilbronn, no website" would silently also mean
+ * "wherever the map happened to be pointing when I saved it".
+ *
+ * `west` may exceed `east`: that is a box crossing the antimeridian, which is
+ * what a map pans across rather than an error.
+ */
+export interface LeadBounds {
+  north: number
+  south: number
+  east: number
+  west: number
+}
+
+/** What the map asked for, with the ceiling it was answered under stated. */
+export interface LeadPointSet {
+  points: LeadPoint[]
+  /**
+   * True when the box held more than `limit` leads. The highest-scoring
+   * survived, so a truncated map still shows the ones worth calling — but it is
+   * said out loud rather than left to be noticed.
+   */
+  truncated: boolean
+  limit: number
+}
+
 /** Distinct values present in the library, for populating the filter bar. */
 export interface LeadFacets {
   cities: { value: string; count: number }[]

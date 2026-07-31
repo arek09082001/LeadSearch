@@ -15,10 +15,12 @@ import {
   type BulkResult,
   type EnrichmentState,
   type LeadAudit,
+  type LeadBounds,
   type LeadDetail,
   type LeadFacets,
   type LeadFilters,
   type LeadListing,
+  type LeadPointSet,
   type LeadRow,
   type LeadStatus,
   type OutreachQueues,
@@ -396,6 +398,104 @@ export async function queryLeadIds(
 
   const rows = ((data ?? []) as { id: string }[]).map((row) => row.id)
   return { ids: rows.slice(0, limit), truncated: rows.length > limit }
+}
+
+/* ------------------------------------------------------------------------- *
+ * The same library, as points
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What the map draws, and nothing else.
+ *
+ * One unbroken literal for the reason LIBRARY_COLUMNS is one. Seven columns
+ * rather than forty-three: at two thousand pins the difference between this and
+ * the row payload is megabytes of audit measurements nobody is reading, fetched
+ * to decide the colour of a dot.
+ */
+const POINT_COLUMNS = 'id, lat, lng, name, current_score, status, audit_flags'
+
+interface PointRecord {
+  id: string
+  lat: number | null
+  lng: number | null
+  name: string
+  current_score: number | null
+  status: LeadStatus
+  audit_flags: string[] | null
+}
+
+/**
+ * How many pins one read may return.
+ *
+ * A stated ceiling rather than a silent one, like EXPORT_LIMIT and
+ * SELECT_ALL_LIMIT before it — `truncated` comes back beside the points and the
+ * surface says so. Two thousand is well past what is legible on a screen and
+ * well short of what makes the payload hurt.
+ */
+export const POINT_LIMIT = 2000
+
+/**
+ * Every lead inside a box, with the same filters the library was drawn with.
+ *
+ * `applyFilters` is the whole point of this function's shape: the map and the
+ * list narrow through one implementation, so a pin can never be a lead the
+ * table would have hidden. What is added here is the box and nothing else.
+ *
+ * Ordered by score before the cap bites, so a viewport holding more leads than
+ * the ceiling keeps the ones worth calling rather than an arbitrary two
+ * thousand. `id` breaks ties, which is what stops the same box returning a
+ * different set on each pan.
+ */
+export async function queryLeadPoints(
+  filters: LeadFilters,
+  bounds: LeadBounds,
+  limit = POINT_LIMIT,
+): Promise<LeadPointSet> {
+  const supabase = createServiceClient()
+
+  const filtered = applyFilters(supabase.from('leads_library').select(POINT_COLUMNS), filters)
+    // A lead Google gave no coordinates for is in the book and off the map.
+    // Both comparisons exclude nulls on their own; this is not a second filter.
+    .gte('lat', bounds.south)
+    .lte('lat', bounds.north)
+
+  /*
+   * A box whose west edge is east of its east edge crosses the antimeridian, so
+   * the longitudes it wants are the two ends of the line rather than the middle
+   * of it. Not a case this book will ever be in — but it is what a world-zoomed
+   * map hands over, and the failure without this branch is a map that goes
+   * blank when you zoom out, which reads as "no leads" rather than as a bug.
+   */
+  const box =
+    bounds.west > bounds.east
+      ? filtered.or(`lng.gte.${bounds.west},lng.lte.${bounds.east}`)
+      : filtered.gte('lng', bounds.west).lte('lng', bounds.east)
+
+  // One row past the ceiling, purely to find out whether there was one.
+  const { data, error } = await box
+    .order('current_score', { ascending: false, nullsFirst: false })
+    .order('id', { ascending: true })
+    .range(0, limit)
+
+  if (error) throw new Error(`Could not read the map: ${error.message}`)
+
+  const records = (data ?? []) as unknown as PointRecord[]
+
+  return {
+    points: records.slice(0, limit).map((record) => ({
+      id: record.id,
+      // Non-null by construction: the predicates above exclude rows without a
+      // coordinate. Asserted here rather than filtered again.
+      lat: record.lat!,
+      lng: record.lng!,
+      name: record.name,
+      score: record.current_score,
+      status: record.status,
+      auditFlags: record.audit_flags ?? [],
+    })),
+    truncated: records.length > limit,
+    limit,
+  }
 }
 
 /**
