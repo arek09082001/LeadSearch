@@ -1,8 +1,10 @@
 import 'server-only'
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { isChangeCode } from '@/lib/leads/changes'
 import { today } from '@/lib/leads/dates'
 import { coldFilters, dueFilters } from '@/lib/leads/filters'
+import { describeDelta, type Snapshot } from '@/lib/refresh/diff'
 import {
   PAGE_SIZE,
   type ActivityType,
@@ -26,8 +28,11 @@ import {
   type TimelineEntry,
   type WebsiteStatus,
 } from '@/lib/leads/types'
+import { queueEnrichment } from '@/lib/enrichment/store'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
-import { readCurrentScore } from '@/lib/scoring/store'
+import { runRefresh } from '@/lib/refresh/run'
+import { compareScores } from '@/lib/scoring/score'
+import { readCurrentScore, readPreviousScore } from '@/lib/scoring/store'
 
 /*
  * Everything the permanent side reads and writes.
@@ -37,6 +42,16 @@ import { readCurrentScore } from '@/lib/scoring/store'
  * code: discovery may only ever *read* `leads`, and a row appears here because
  * saveLeads() was called by a route the operator deliberately hit.
  */
+
+/**
+ * The enrichment queue's door, re-exported.
+ *
+ * It lives in lib/enrichment/store.ts — saving, the bulk re-audit and the
+ * refresh pass all need it, and having the refresh pass reach into this module
+ * for it made the two import each other. Kept exported here so the routes that
+ * already speak to this module did not have to learn a second one.
+ */
+export { queueEnrichment }
 
 /** The `leads_library` view, as it comes back over the wire. */
 interface LibraryRecord {
@@ -79,6 +94,9 @@ interface LibraryRecord {
   psi_lcp_ms: number | null
   psi_cls: number | string | null
   audit_flags: string[] | null
+  change_flags: string[] | null
+  changed_at: string | null
+  refresh_error: string | null
   list_ids: string[] | null
   note_count: number | null
 }
@@ -89,7 +107,7 @@ interface LibraryRecord {
  * splitting it across lines to be tidy collapses that inference to `string`.
  */
 const LIBRARY_COLUMNS =
-  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, list_ids, note_count'
+  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, change_flags, changed_at, refresh_error, list_ids, note_count'
 
 function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
   return {
@@ -134,6 +152,9 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
     // numeric(5,3) arrives as a string from PostgREST, like rating above.
     psiCls: record.psi_cls === null ? null : Number(record.psi_cls),
     auditFlags: record.audit_flags ?? [],
+    changeFlags: record.change_flags ?? [],
+    changedAt: record.changed_at,
+    refreshError: record.refresh_error,
     lists: (record.list_ids ?? [])
       .map((id) => ({ id, name: listNames.get(id) ?? 'Unknown list' }))
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
@@ -149,6 +170,7 @@ const SORT_COLUMNS: Record<LeadFilters['sort'], string> = {
   status: 'status',
   follow_up: 'follow_up_at',
   audited: 'last_audited_at',
+  changed: 'changed_at',
 }
 
 /* ------------------------------------------------------------------------- *
@@ -222,6 +244,13 @@ function applyFilters<T>(query: T, filters: LeadFilters): T {
    */
   if (filters.audit.length) result = result.overlaps('audit_flags', filters.audit)
 
+  /*
+   * The change filters, in the same one predicate and OR'd for the same reason.
+   * "Built a site, or their number changed" is a question; a site that did both
+   * at once is not.
+   */
+  if (filters.change.length) result = result.overlaps('change_flags', filters.change)
+
   switch (filters.followUp) {
     // A date that has arrived, whether this morning or a fortnight ago. Null
     // dates are excluded by the comparison itself, not by a second predicate.
@@ -284,6 +313,54 @@ export async function queryLeads(filters: LeadFilters): Promise<LeadListing> {
     libraryTotal,
     page: filters.page,
     pageSize: PAGE_SIZE,
+  }
+}
+
+/**
+ * The whole filtered set, a page at a time.
+ *
+ * What the CSV export reads. A generator rather than an array for the reason
+ * the provider's search is a generator: the caller writes each page to the
+ * response as it arrives, so a four-thousand-row export never has four thousand
+ * rows in memory at once and the browser starts receiving the file immediately.
+ *
+ * Ordered by the same sort the page was drawn with, and by `id` last, which is
+ * what stops `range()` dropping and repeating rows between pages. `EXPORT_LIMIT`
+ * is a stated ceiling rather than a silent one — the route says so in the file
+ * when it bites.
+ */
+export const EXPORT_LIMIT = 20_000
+
+export async function* leadPages(
+  filters: LeadFilters,
+  pageSize = 500,
+  limit = EXPORT_LIMIT,
+): AsyncGenerator<LeadRow[], void, void> {
+  const supabase = createServiceClient()
+  const listNames = await readListNames()
+  const column = SORT_COLUMNS[filters.sort] ?? SORT_COLUMNS.score
+
+  for (let offset = 0; offset < limit; offset += pageSize) {
+    const size = Math.min(pageSize, limit - offset)
+
+    const { data, error } = await applyFilters(
+      supabase.from('leads_library').select(LIBRARY_COLUMNS),
+      filters,
+    )
+      .order(column, { ascending: !filters.desc, nullsFirst: false })
+      .order('saved_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(offset, offset + size - 1)
+
+    if (error) throw new Error(`Could not read the library: ${error.message}`)
+
+    const rows = ((data ?? []) as unknown as LibraryRecord[]).map((record) =>
+      toRow(record, listNames),
+    )
+    if (!rows.length) return
+
+    yield rows
+    if (rows.length < size) return
   }
 }
 
@@ -686,28 +763,6 @@ export async function saveLeads(request: SaveRequest): Promise<SaveResult> {
   }
 }
 
-/** Mark leads for the background pass. Returns how many are now waiting. */
-export async function queueEnrichment(leadIds: string[]): Promise<number> {
-  if (!leadIds.length) return 0
-
-  const supabase = createServiceClient()
-  const { data, error } = await supabase
-    .from('leads')
-    .update({
-      enrichment_state: 'queued',
-      enrichment_queued_at: new Date().toISOString(),
-      enrichment_error: null,
-    })
-    .in('id', leadIds)
-    .select('id')
-
-  if (error) {
-    console.error('[leads] could not queue enrichment', error.message)
-    return 0
-  }
-  return data?.length ?? 0
-}
-
 /* ------------------------------------------------------------------------- *
  * Bulk actions
  * ------------------------------------------------------------------------- */
@@ -824,6 +879,29 @@ export async function applyBulk(leadIds: string[], action: BulkAction): Promise<
       }
     }
 
+    /*
+     * The one bulk action that spends money, so it is the one that runs in front
+     * of the response instead of queueing.
+     *
+     * Every lead in the selection is a billable Place Details call, and the
+     * operator is entitled to be told what it cost him and what it found before
+     * the page moves. The pass stops itself at the monthly ceiling and says so.
+     */
+    case 'refresh': {
+      const pass = await runRefresh({ leadIds, source: 'manual' })
+      const said = [
+        `${pass.refreshed} ${plural(pass.refreshed, 'lead', 'leads')} refreshed`,
+        pass.changed ? `${pass.changed} changed` : null,
+        pass.reAudited ? `${pass.reAudited} re-audited` : null,
+        pass.failed ? `${pass.failed} could not be reached` : null,
+      ].filter(Boolean)
+
+      return {
+        affected: pass.refreshed,
+        message: pass.stoppedBy ? `${said.join(', ')}. ${pass.stoppedBy}` : `${said.join(', ')}.`,
+      }
+    }
+
     default:
       throw new Error('Unknown action.')
   }
@@ -843,23 +921,59 @@ export async function readLead(id: string): Promise<LeadRow | null> {
   return toRow(data as unknown as LibraryRecord, listNames)
 }
 
+/** One refresh row, as it comes back over the wire. */
+interface RefreshRow {
+  id: string
+  refreshed_at: string
+  changes: string[] | null
+  before: Snapshot | null
+  after: Snapshot | null
+  error: string | null
+}
+
+/**
+ * A refresh row as one sentence.
+ *
+ * Built here rather than stored, because it is a rendering of the codes and the
+ * values beside them — and a rendering that lives in the database is one that
+ * cannot be improved without a migration. A row written before the values were
+ * captured, or by a build with a code this one does not know, comes back with
+ * nothing to say rather than with a guess.
+ */
+function refreshSentence(row: RefreshRow): string | null {
+  if (row.error) return `Google could not be reached. ${row.error}`
+  if (!row.before || !row.after) return null
+
+  const codes = (row.changes ?? []).filter(isChangeCode)
+  if (!codes.length) return null
+
+  return describeDelta({ codes, before: row.before, after: row.after })
+}
+
 /**
  * Everything that has happened to this lead, as one sequence.
  *
- * Two tables, read separately and merged here rather than in SQL. A union view
- * would have to widen both sides to a common column list and cast the enum to
- * text to do it, and the result would still need sorting in one place — this
- * way each table keeps its own shape and the merge is four lines that can be
+ * Three tables now, read separately and merged here rather than in SQL. A union
+ * view would have to widen every side to a common column list and cast the enum
+ * to text to do it, and the result would still need sorting in one place — this
+ * way each table keeps its own shape and the merge is a few lines that can be
  * read.
  *
- * Both sides are limited before the merge, so a lead with three hundred notes
+ * The third table is `lead_refreshes`, and it belongs here rather than in a
+ * panel of its own for the reason the notes and the activities were merged in
+ * the first place: the operator worked this lead once, in one order. "I called
+ * them in May, they said they were thinking about it, and in July they built a
+ * website" is one story, and splitting it across two lists on the same page
+ * would make him assemble it himself every time he came back cold.
+ *
+ * Every side is limited before the merge, so a lead with three hundred notes
  * cannot push its status history off the end of the page: the limit costs the
  * oldest lines of each, which is what a limit on a history should cost.
  */
 export async function readTimeline(leadId: string, limit = 200): Promise<TimelineEntry[]> {
   const supabase = createServiceClient()
 
-  const [activities, notes] = await Promise.all([
+  const [activities, notes, refreshes] = await Promise.all([
     supabase
       .from('lead_activities')
       .select('id, type, occurred_at, summary, status_before, status_after')
@@ -872,9 +986,25 @@ export async function readTimeline(leadId: string, limit = 200): Promise<Timelin
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false })
       .limit(limit),
+    supabase
+      .from('lead_refreshes')
+      .select('id, refreshed_at, changes, before, after, error')
+      .eq('lead_id', leadId)
+      .order('refreshed_at', { ascending: false })
+      .limit(limit),
   ])
 
   const entries: TimelineEntry[] = [
+    ...((refreshes.data ?? []) as RefreshRow[]).map((row) => ({
+      id: `refresh:${row.id}`,
+      kind: 'refresh' as const,
+      type: null,
+      at: row.refreshed_at,
+      body: refreshSentence(row),
+      statusBefore: null,
+      statusAfter: null,
+      changes: row.changes ?? [],
+    })),
     ...((activities.data ?? []) as {
       id: number
       type: ActivityType
@@ -1001,12 +1131,15 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
 
   // The score and the history are read alongside rather than after: neither
   // hangs off the audit, and a lead with no audit at all can carry both.
-  const [lead, score, timeline] = await Promise.all([
+  const [lead, score, previousScore, timeline] = await Promise.all([
     readLead(id),
     readCurrentScore(id),
+    readPreviousScore(id),
     readTimeline(id),
   ])
   if (!lead) return null
+
+  const movement = compareScores(previousScore, score)
 
   const { data: audits } = await supabase
     .from('lead_audits')
@@ -1018,7 +1151,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score, timeline }
+  if (!newest) return { lead, audit: null, history: [], score, movement, timeline }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -1057,7 +1190,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score, timeline }
+  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline }
 }
 
 export async function updateLead(

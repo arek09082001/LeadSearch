@@ -252,6 +252,16 @@ export async function readCurrentScore(leadId: string): Promise<StoredScore | nu
     factors: unknown
   }
 
+  return toStored(record)
+}
+
+function toStored(record: {
+  id: string
+  score: number | null
+  config_version: string
+  computed_at: string
+  factors: unknown
+}): StoredScore {
   return {
     id: record.id,
     score: record.score,
@@ -259,4 +269,54 @@ export async function readCurrentScore(leadId: string): Promise<StoredScore | nu
     computedAt: record.computed_at,
     breakdown: asBreakdown(record.factors),
   }
+}
+
+/**
+ * The score before the one currently on the lead.
+ *
+ * Ordered exactly as the denormalisation trigger orders — `computed_at desc, id
+ * desc` — and then stepped past the current row rather than filtered by
+ * timestamp. Two scores written in the same statement share a `computed_at` to
+ * the microsecond, and a `< computed_at` predicate would silently skip one of
+ * them or return the current score as its own predecessor.
+ *
+ * Null when this lead has only ever been scored once, which is not a gap: a
+ * first score has not moved.
+ */
+export async function readPreviousScore(leadId: string): Promise<StoredScore | null> {
+  const supabase = createServiceClient()
+
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('current_score_id')
+    .eq('id', leadId)
+    .maybeSingle()
+
+  const currentId = (lead as { current_score_id: string | null } | null)?.current_score_id
+  if (!currentId) return null
+
+  const { data } = await supabase
+    .from('lead_scores')
+    .select('id, score, config_version, computed_at, factors')
+    .eq('lead_id', leadId)
+    .order('computed_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(2)
+
+  const rows = (data ?? []) as {
+    id: string
+    score: number | null
+    config_version: string
+    computed_at: string
+    factors: unknown
+  }[]
+
+  const index = rows.findIndex((row) => row.id === currentId)
+  // The current score not being in the newest two means something newer exists
+  // that the trigger has not caught up with. Saying nothing is better than
+  // comparing against a row that is not the one on screen.
+  if (index === -1) return null
+
+  const previous = rows[index + 1]
+  return previous ? toStored(previous) : null
 }

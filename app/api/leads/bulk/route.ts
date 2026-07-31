@@ -20,6 +20,15 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
+/**
+ * The most leads one refresh will ask Google about.
+ *
+ * Matches the pass's own per-invocation batch, so the ceiling the operator is
+ * told about and the work actually done are the same number rather than two
+ * limits that disagree.
+ */
+const MAX_REFRESH = 40
+
 function parseAction(raw: Record<string, unknown>): BulkAction | { error: string } {
   switch (raw.action) {
     case 'status': {
@@ -57,6 +66,8 @@ function parseAction(raw: Record<string, unknown>): BulkAction | { error: string
       return { action: 'restore' }
     case 're_audit':
       return { action: 're_audit' }
+    case 'refresh':
+      return { action: 'refresh' }
 
     default:
       return { error: 'Unknown action.' }
@@ -84,6 +95,21 @@ export async function POST(request: Request) {
 
     if (!ids.length) {
       return Response.json({ error: 'Nothing was selected.' }, { status: 400 })
+    }
+
+    /*
+     * The refresh is the one action here that costs money per lead, so it is the
+     * one with a ceiling on the size of the selection. "Select all filtered" can
+     * legitimately mean four thousand rows, and four thousand Place Details
+     * calls is not something to start because a checkbox was convenient.
+     */
+    if (action.action === 'refresh' && ids.length > MAX_REFRESH) {
+      return Response.json(
+        {
+          error: `A refresh asks Google about every lead in the selection, one billable request each. ${ids.length.toLocaleString('de-DE')} is more than the ${MAX_REFRESH} this will do at once — narrow the view first.`,
+        },
+        { status: 400 },
+      )
     }
 
     const result = await applyBulk(ids, action)

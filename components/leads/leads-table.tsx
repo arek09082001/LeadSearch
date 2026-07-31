@@ -3,6 +3,7 @@
 import Link from 'next/link'
 
 import { IconChevronDown, IconExternal, IconPulse } from '@/components/icons'
+import { ChangeMarks } from '@/components/leads/change-marks'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { Checkbox } from '@/components/ui/controls'
 import { cursorProps } from '@/components/ui/use-list-keys'
@@ -276,6 +277,7 @@ export function LeadsTable({
             const cursored = index === cursor
             const due = lead.followUpAt !== null && lead.followUpAt <= now
             const deleted = lead.deletedAt !== null
+            const category = lead.primaryType ? formatPlaceType(lead.primaryType) : null
 
             return (
               <tr
@@ -322,20 +324,39 @@ export function LeadsTable({
                       already looks at to identify a row, so it is what he
                       should be able to click — no separate affordance to find,
                       and no widening of the row to hold one.
+
+                      The explicit max-width is what makes `truncate` work at
+                      all. In an auto-layout table a cell grows to fit its
+                      content, so overflow-hidden on something with no bound has
+                      nothing to hide; only a definite width clips. German
+                      business names are the case that proves it —
+                      "Elektroinstallationen und Gebäudetechnik Müller GmbH &
+                      Co. KG" is not an unusual one, and unclipped it pushes the
+                      table past the viewport and drags every other column with
+                      it. Widened at the breakpoints where there is room for it.
                     */}
                     <Link
                       href={`/leads/${lead.id}`}
-                      className={`truncate underline decoration-transparent underline-offset-2 transition-colors hover:decoration-ink-faint ${
+                      className={`max-w-[14rem] min-w-0 truncate underline decoration-transparent underline-offset-2 transition-colors hover:decoration-ink-faint lg:max-w-[20rem] 2xl:max-w-[26rem] ${
                         deleted ? 'text-ink-faint line-through' : 'text-ink'
                       }`}
                       title={lead.name}
                     >
                       {lead.name}
                     </Link>
+
+                    {/*
+                      What has changed about the business, next to the business.
+                      Never in the Audit column — a fault is something wrong
+                      with a website, a change is something that happened to a
+                      company, and the two must not be read as one list.
+                    */}
+                    <ChangeMarks codes={lead.changeFlags} at={lead.changedAt} />
+
                     {lead.lists.map((list) => (
                       <span
                         key={list.id}
-                        className="label shrink-0 text-ink-faint"
+                        className="label max-w-[8rem] shrink-0 truncate text-ink-faint"
                         title={`In list ${list.name}`}
                       >
                         {list.name}
@@ -365,7 +386,7 @@ export function LeadsTable({
                       target="_blank"
                       rel="noopener noreferrer"
                       title={lead.website}
-                      className="block truncate font-data text-sm text-ink-faint underline decoration-rule-strong underline-offset-2 transition-colors hover:text-ink-dim hover:decoration-ink-faint"
+                      className="block max-w-[10rem] truncate font-data text-sm text-ink-faint underline decoration-rule-strong underline-offset-2 transition-colors hover:text-ink-dim hover:decoration-ink-faint"
                     >
                       {hostname(lead.website)}
                     </a>
@@ -378,12 +399,27 @@ export function LeadsTable({
                   <AuditMarks lead={lead} />
                 </td>
 
-                <td className="hidden truncate px-2 py-1.5 text-sm lg:table-cell">
-                  {lead.city ?? <span className="text-ink-faint">—</span>}
+                {/*
+                  The bound goes on the span, not the cell, for the reason it
+                  does on the name above: a table cell in auto layout has no
+                  width to overflow. Ortsteil-heavy German city strings and
+                  Google's longer place types are both well past what these
+                  columns can hold.
+                */}
+                <td className="hidden px-2 py-1.5 text-sm lg:table-cell">
+                  {lead.city ? (
+                    <span className="block max-w-[8rem] truncate" title={lead.city}>
+                      {lead.city}
+                    </span>
+                  ) : (
+                    <span className="text-ink-faint">—</span>
+                  )}
                 </td>
 
-                <td className="hidden truncate px-2 py-1.5 text-sm 2xl:table-cell">
-                  {lead.primaryType ? formatPlaceType(lead.primaryType) : '—'}
+                <td className="hidden px-2 py-1.5 text-sm 2xl:table-cell">
+                  <span className="block max-w-[9rem] truncate" title={category ?? undefined}>
+                    {category ?? '—'}
+                  </span>
                 </td>
 
                 <td className="hidden px-2 py-1.5 font-data text-micro xl:table-cell">

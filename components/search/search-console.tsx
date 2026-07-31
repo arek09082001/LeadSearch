@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 
-import { IconCeiling } from '@/components/icons'
+import { IconAlert, IconCeiling } from '@/components/icons'
 import { CostReadout } from '@/components/search/cost-readout'
 import { ResultsTable } from '@/components/search/results-table'
 import { SaveBar } from '@/components/search/save-bar'
@@ -113,10 +113,35 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
         onSaved={markSaved}
       />
 
-      {state.status === 'error' ? (
+      {/*
+        A failure PART WAY THROUGH is the ordinary shape of a Google outage: page
+        one arrives, page two 500s. Those first twenty rows were billed, cached
+        and are perfectly good — replacing the table with an error state would
+        throw away work the operator has already paid for and tell him nothing
+        was fetched, which is false.
+      *
+        So the error only takes the whole surface when there is nothing to lose.
+        With rows on screen it is a band above them, in the same shape the
+        ceiling notice uses, and the table stays exactly as it was.
+      */}
+      {state.status === 'error' && state.rows.length > 0 ? (
+        <div className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2">
+          <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
+          <div className="min-w-0">
+            <p className="label text-alert">Google stopped answering part way</p>
+            <p className="mt-0.5 text-sm text-ink-dim">
+              {state.error} The {state.rows.length} result
+              {state.rows.length === 1 ? '' : 's'} below arrived before it stopped, are
+              already paid for, and can be saved. Search again for the rest.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
+      {state.status === 'error' && state.rows.length === 0 ? (
         <ErrorState
           headline="Search failed"
-          body="Nothing was saved and the run was recorded with its error. Check the query and the API key, then try again."
+          body="Nothing was fetched and the run was recorded with its error. Check the query and the API key, then try again."
           detail={state.error ?? undefined}
         />
       ) : state.rows.length > 0 ? (

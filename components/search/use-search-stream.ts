@@ -198,9 +198,18 @@ function reduce(state: SearchStreamState, event: SearchEvent): SearchStreamState
       return { ...state, status: 'error', error: event.message }
 
     case 'done':
+      /*
+       * `done` closes the run; it does not overrule how the run ended.
+       *
+       * Both `blocked` and `error` are followed by a `done` carrying the final
+       * total and cost — a search that stopped at the ceiling, or on a Google
+       * outage half way through, still fetched and still billed for real rows.
+       * Letting `done` reset the status would wipe the one sentence explaining
+       * why the table is shorter than the operator asked for.
+       */
       return {
         ...state,
-        status: state.status === 'blocked' ? 'blocked' : 'done',
+        status: state.status === 'running' ? 'done' : state.status,
         searchCostUsd: event.searchCostUsd,
       }
 

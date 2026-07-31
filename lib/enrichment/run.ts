@@ -2,13 +2,14 @@ import 'server-only'
 
 import { measureWebsite } from '@/lib/enrichment/checker'
 import { judgeMeasurement, judgePerformance } from '@/lib/enrichment/findings'
-import { measurePageSpeed } from '@/lib/enrichment/pagespeed'
+import { hasPageSpeedKey, measurePageSpeed } from '@/lib/enrichment/pagespeed'
 import {
   claimPerformanceWork,
   countPendingPerformance,
   failLead,
   reclaimStalePerformance,
   recordPerformance,
+  releasePerformance,
   writeAudit,
   type PerformanceJob,
 } from '@/lib/enrichment/store'
@@ -48,9 +49,22 @@ const BATCH_LIMIT = 12
 /** A claim older than this belonged to an invocation that died. */
 const STALE_CLAIM_MINUTES = 10
 
-/** PageSpeed jobs in flight. They are almost entirely spent waiting on Google. */
-const PSI_CONCURRENCY = 4
-const PSI_BATCH = 4
+/**
+ * PageSpeed jobs in flight, and the batch they come from.
+ *
+ * Sized by whether a key is configured, because the two cases have quotas that
+ * differ by three orders of magnitude. With a key it is 25,000 requests a day
+ * and they are ours. Without one the quota is per-IP and shared with everything
+ * else running on the host, which on a serverless platform means everything else
+ * on that machine — four calls at once there is a way to be rate-limited on
+ * purpose, and a bulk re-audit is what proves it.
+ *
+ * Read through functions rather than as constants because `hasPageSpeedKey()`
+ * reads the environment, and a module-level constant would freeze the answer at
+ * import time.
+ */
+const psiConcurrency = () => (hasPageSpeedKey() ? 4 : 1)
+const psiBatch = () => (hasPageSpeedKey() ? 4 : 2)
 /** Shorter than the lead claim: a PageSpeed job either answers within 35s or never. */
 const PSI_STALE_MINUTES = 3
 
@@ -141,19 +155,20 @@ async function release(leadIds: string[]): Promise<void> {
 
 /**
  * Run `worker` over `items`, at most `limit` in flight, starting nothing after
- * `deadline`. Returns whatever it never started, which the caller owes back to
- * the queue.
+ * `deadline` or once `halted` is set. Returns whatever it never started, which
+ * the caller owes back to the queue.
  */
 async function pooled<T>(
   items: T[],
   limit: number,
   deadline: number,
+  halted: () => boolean,
   worker: (item: T) => Promise<void>,
 ): Promise<T[]> {
   let cursor = 0
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
     for (;;) {
-      if (Date.now() >= deadline) return
+      if (Date.now() >= deadline || halted()) return
       const index = cursor
       cursor += 1
       if (index >= items.length) return
@@ -184,10 +199,20 @@ async function auditOne(lead: Claim): Promise<void> {
  * Stage two — PageSpeed
  * ------------------------------------------------------------------------- */
 
-async function profileOne(job: PerformanceJob): Promise<void> {
+async function profileOne(job: PerformanceJob, limited: { hit: boolean }): Promise<void> {
   try {
     const psi = await measurePageSpeed(job.url)
-    await recordPerformance(job.auditId, psi, judgePerformance(psi))
+
+    /*
+     * The circuit breaker. Once Google has refused once in this invocation, the
+     * remaining jobs will be refused too — the limit is per key or per IP, not
+     * per request — and starting them spends the retry budget of four more
+     * audits to learn the same thing. So the first refusal stops the pass, and
+     * the back-off written by `recordPerformance` decides when to try again.
+     */
+    if (psi.retryable) limited.hit = true
+
+    await recordPerformance(job.auditId, psi, judgePerformance(psi), job.attempts)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'PageSpeed failed unexpectedly.'
     console.error('[enrichment] pagespeed failed', { auditId: job.auditId, message })
@@ -197,11 +222,16 @@ async function profileOne(job: PerformanceJob): Promise<void> {
      * and its diagnosis is already on screen; only the scores are missing, and
      * marking the whole lead `failed` over that would hide a good diagnosis
      * behind a Google outage.
+     *
+     * Retryable, because this branch is reached only by something throwing —
+     * `measurePageSpeed` never does, so anything here is the database or the
+     * runtime, neither of which is a verdict on the website.
      */
     await recordPerformance(
       job.auditId,
       {
         state: 'failed',
+        retryable: true,
         performance: null,
         lcpMs: null,
         cls: null,
@@ -211,6 +241,7 @@ async function profileOne(job: PerformanceJob): Promise<void> {
         reportUrl: null,
       },
       [],
+      job.attempts,
     ).catch(() => {})
   }
 }
@@ -226,14 +257,30 @@ async function runPerformance(deadline: number): Promise<number> {
 
   await reclaimStalePerformance(PSI_STALE_MINUTES)
 
-  const jobs = await claimPerformanceWork(PSI_BATCH)
+  const jobs = await claimPerformanceWork(psiBatch())
   if (!jobs.length) return 0
+
+  const limited = { hit: false }
 
   // No deadline inside this pool: every job was claimed knowing its own timeout
   // fits in the time left, and abandoning one mid-flight would spend a call
-  // against a rate-limited quota for nothing.
-  await pooled(jobs, PSI_CONCURRENCY, Infinity, profileOne)
-  return jobs.length
+  // against a rate-limited quota for nothing. The halt test is the rate-limit
+  // breaker — jobs it stops are still `pending` and come back on the next pass.
+  const unstarted = await pooled(
+    jobs,
+    psiConcurrency(),
+    Infinity,
+    () => limited.hit,
+    (job) => profileOne(job, limited),
+  )
+
+  if (unstarted.length) {
+    // Put back what the breaker stopped, with no attempt spent on it: it was
+    // never asked, so it is not on its second try.
+    await releasePerformance(unstarted.map((job) => job.auditId))
+  }
+
+  return jobs.length - unstarted.length
 }
 
 /* ------------------------------------------------------------------------- *
@@ -263,7 +310,7 @@ export async function runEnrichment(leadIds: string[] | null = null): Promise<En
 
     const work = await claim(leadIds, BATCH_LIMIT)
     if (work.length) {
-      const unstarted = await pooled(work, CONCURRENCY, deadline, auditOne)
+      const unstarted = await pooled(work, CONCURRENCY, deadline, () => false, auditOne)
       await release(unstarted.map((lead) => lead.id))
       pass.audited = work.length - unstarted.length
     }

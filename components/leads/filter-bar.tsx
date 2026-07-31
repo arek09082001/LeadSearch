@@ -5,12 +5,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { IconClose, IconFilter, IconSearch } from '@/components/icons'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuCheck, MenuItem, MenuLabel } from '@/components/ui/controls'
+import { CHANGE_FILTERS } from '@/lib/leads/changes'
 import { activeFilterCount } from '@/lib/leads/filters'
 import { formatPlaceType } from '@/lib/places-types'
 import {
   AUDIT_FILTERS,
   FOLLOW_UP_FILTERS,
   type AuditFilter,
+  type ChangeFilter,
   type FollowUpFilter,
   type LeadFacets,
   type LeadFilters,
@@ -190,6 +192,20 @@ export function FilterBar({
         format={(key) => AUDIT_FILTERS.find((entry) => entry.key === key)?.label ?? key}
       />
 
+      {/*
+        What the refresh found. Kept beside Audit and not merged into it: one
+        asks what is wrong with a website, the other asks what has happened to a
+        business, and "show me everyone who has built a site since I saved them"
+        is a different question from any fault.
+      */}
+      <FacetMenu
+        label="Changed"
+        options={CHANGE_FILTERS.map((entry) => ({ value: entry.key }))}
+        selected={filters.change}
+        onToggle={(value) => onChange({ change: toggle(filters.change, value as ChangeFilter) })}
+        format={(key) => CHANGE_FILTERS.find((entry) => entry.key === key)?.label ?? key}
+      />
+
       <Menu
         label={
           <span className={filters.followUp ? 'text-signal' : ''}>{followUpLabel}</span>
@@ -290,6 +306,7 @@ export function FilterBar({
               scoreMin: null,
               scoreMax: null,
               audit: [],
+              change: [],
               followUp: null,
             })
           }

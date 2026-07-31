@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { IconAlert, IconClose, IconSearch } from '@/components/icons'
+import { ChangeMarks } from '@/components/leads/change-marks'
+import { ExportCsv } from '@/components/leads/export-csv'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { CommandButton, CommandLink } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
@@ -249,12 +251,29 @@ export function OutreachConsole({ due, cold }: OutreachQueues) {
                 {section.title} — {section.listing.total.toLocaleString('de-DE')}
               </h2>
               <p className="text-sm text-ink-faint">{section.note}</p>
-              <Link
-                href={section.href}
-                className="label ml-auto text-ink-faint transition-colors hover:text-signal"
-              >
-                Open in the book
-              </Link>
+              <span className="ml-auto flex items-center gap-3">
+                <Link
+                  href={section.href}
+                  className="label text-ink-faint transition-colors hover:text-signal"
+                >
+                  Open in the book
+                </Link>
+                {/*
+                  The queue as a file. `queue=` rather than the filter set,
+                  because these two questions are defined in one place — see
+                  dueFilters and coldFilters — and having the export restate
+                  them is how the file and the screen come to disagree.
+
+                  The count is the queue's total, not the page's: the export is
+                  the whole queue, including the rows the one-page cap below is
+                  hiding.
+                */}
+                <ExportCsv
+                  query={`queue=${section.key}`}
+                  count={section.listing.total}
+                  label={`${section.title} CSV`}
+                />
+              </span>
             </div>
 
             {section.rows.length === 0 ? (
@@ -359,6 +378,13 @@ function QueueRow({
         >
           {lead.name}
         </Link>
+
+        {/*
+          A queue row earns these more than a library row does. He is about to
+          phone this business, and "they built a website last month" is the one
+          fact that changes what he says when they pick up.
+        */}
+        <ChangeMarks codes={lead.changeFlags} at={lead.changedAt} />
 
         <span className={`label ${edit?.status ? 'text-signal' : 'text-ink-dim'}`}>{status}</span>
 

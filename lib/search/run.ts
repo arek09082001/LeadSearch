@@ -158,9 +158,25 @@ export async function* runSearch(
         return true
       })
 
-      // Cache before rendering: if the operator closes the tab mid-search, the
-      // rows Google already charged for are still on disk for the replay.
-      await persistResults(searchId, fresh, total)
+      /*
+       * Cache before rendering: if the operator closes the tab mid-search, the
+       * rows Google already charged for are still on disk for the replay.
+       *
+       * A failed cache write does not fail the search, though. Google has been
+       * paid either way and the rows are in hand; losing them would turn a
+       * database hiccup into twenty businesses the operator never sees. What is
+       * lost is the free replay, which is a cost problem, not a data one — so it
+       * is logged loudly and the page is yielded regardless.
+       */
+      try {
+        await persistResults(searchId, fresh, total)
+      } catch (error) {
+        console.error('[search] could not cache a page that was already paid for', {
+          searchId,
+          pageIndex: page.pageIndex,
+          error,
+        })
+      }
       total += fresh.length
 
       if (fresh.length) {
@@ -193,6 +209,19 @@ export async function* runSearch(
       return
     }
 
+    /*
+     * An abort is the operator navigating away, not a failure of anything.
+     *
+     * Recording it as one would put "This operation was aborted" on the search
+     * row for ever, and every closed tab would look in the history like a
+     * broken search. The rows already fetched are cached and the run is
+     * finalised with what it actually got.
+     */
+    if (signal?.aborted) {
+      await finalizeSearch(searchId, { resultCount: total, costUsd: guard.spentUsd })
+      return
+    }
+
     failure =
       error instanceof ProviderError
         ? error.message
@@ -208,7 +237,17 @@ export async function* runSearch(
   })
 
   if (failure) {
+    /*
+     * A failure part way through still emits `done`, and the order matters.
+     *
+     * Google returning page one and then 500-ing on page two is the ordinary
+     * shape of an outage, and those first twenty rows are billed, cached and
+     * good. The error says what stopped; `done` carries what was actually
+     * fetched and what it cost, so the surface can keep the rows on screen and
+     * the ledger and the readout agree.
+     */
     yield { type: 'error', message: failure }
+    yield { type: 'done', total, searchCostUsd: guard.spentUsd, cached: false }
     return
   }
 

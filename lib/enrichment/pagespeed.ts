@@ -16,6 +16,18 @@ import 'server-only'
  *   - It is free, and the free tier is rate-limited per key (or per IP with no
  *     key). A 429 is therefore an ordinary outcome, not an incident, and is
  *     recorded on the audit rather than raised.
+ *
+ * THE RATE LIMIT IS A "NOT NOW", AND THE DIFFERENCE MATTERS. A bulk re-audit is
+ * exactly the traffic shape that trips the free tier: forty leads queued at once
+ * means forty PageSpeed calls in a few minutes, and Google starts refusing part
+ * way through. Recording those refusals as `failed` would permanently mark a
+ * batch of perfectly good sites unscoreable because of a limit that lifted a
+ * minute later — and the score queue skips a lead whose PageSpeed never
+ * settled, so those leads would sit unranked for ever with nothing saying why.
+ *
+ * So a refusal that will pass is flagged as such here and turned into a retry by
+ * the store, and a refusal that will not — a page Lighthouse cannot load — is a
+ * real failure and stays one.
  */
 
 /** Generous, because the API genuinely is this slow, and finite because we die at 60s. */
@@ -25,6 +37,12 @@ const ENDPOINT = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed'
 
 export interface PageSpeed {
   state: 'ok' | 'failed' | 'skipped'
+  /**
+   * True when the failure was Google declining to answer right now rather than
+   * anything about the site: a rate limit, a 5xx, or a timeout. The caller puts
+   * the job back rather than writing the failure down for good.
+   */
+  retryable: boolean
   /** Lighthouse performance category, 0–100 on the mobile strategy. */
   performance: number | null
   /** Largest Contentful Paint, in milliseconds. */
@@ -44,6 +62,7 @@ export interface PageSpeed {
 function skipped(reason: string): PageSpeed {
   return {
     state: 'skipped',
+    retryable: false,
     performance: null,
     lcpMs: null,
     cls: null,
@@ -54,9 +73,10 @@ function skipped(reason: string): PageSpeed {
   }
 }
 
-function failed(url: string, reason: string): PageSpeed {
+function failed(url: string, reason: string, retryable = false): PageSpeed {
   return {
     state: 'failed',
+    retryable,
     performance: null,
     lcpMs: null,
     cls: null,
@@ -69,6 +89,18 @@ function failed(url: string, reason: string): PageSpeed {
 
 function reportUrl(url: string): string {
   return `https://pagespeed.web.dev/analysis?url=${encodeURIComponent(url)}&form_factor=mobile`
+}
+
+/**
+ * Is a key configured?
+ *
+ * Read by the pass to size its own concurrency. Without a key the quota is
+ * per-IP and shared with everything else on the host, which on a serverless
+ * platform means everything else on that machine — four calls at once is a way
+ * to be rate-limited on purpose. With one it is 25,000 a day and ours alone.
+ */
+export function hasPageSpeedKey(): boolean {
+  return Boolean(process.env.GOOGLE_PAGESPEED_API_KEY)
 }
 
 /** Lighthouse hands back a 0–1 score; everyone including Google talks in 0–100. */
@@ -122,7 +154,15 @@ export async function measurePageSpeed(url: string): Promise<PageSpeed> {
       } | null)?.error?.message
 
       if (response.status === 429) {
-        return failed(url, 'PageSpeed is rate-limiting us. Re-run the audit later.')
+        return failed(url, 'PageSpeed is rate-limiting us. Waiting and trying again.', true)
+      }
+      /*
+       * A 5xx is Google having a bad minute, not a verdict on the site. Treated
+       * as retryable for the same reason the 429 is: the alternative is a batch
+       * of leads permanently unscoreable because of an outage.
+       */
+      if (response.status >= 500) {
+        return failed(url, `PageSpeed answered ${response.status}. Trying again later.`, true)
       }
       return failed(url, detail ?? `PageSpeed answered ${response.status}.`)
     }
@@ -148,6 +188,7 @@ export async function measurePageSpeed(url: string): Promise<PageSpeed> {
 
     return {
       state: 'ok',
+      retryable: false,
       performance: toHundred(lighthouse?.categories?.performance?.score),
       lcpMs: lcp === null ? null : Math.round(lcp),
       cls: numericValue(lighthouse?.audits, 'cumulative-layout-shift'),
@@ -157,6 +198,7 @@ export async function measurePageSpeed(url: string): Promise<PageSpeed> {
       reportUrl: reportUrl(url),
     }
   } catch (error) {
+    // A timeout or a transport failure says nothing about the site either.
     const aborted = error instanceof Error && error.name === 'AbortError'
     return failed(
       url,
@@ -165,6 +207,7 @@ export async function measurePageSpeed(url: string): Promise<PageSpeed> {
         : error instanceof Error
           ? error.message
           : 'PageSpeed could not be reached.',
+      true,
     )
   } finally {
     clearTimeout(timer)

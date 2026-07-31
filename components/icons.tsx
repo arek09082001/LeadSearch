@@ -216,6 +216,29 @@ export function IconMore(props: IconProps) {
   )
 }
 
+/** Export: the record leaving the product, down onto a rule. */
+export function IconDownload(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2.5v7.5" />
+      <path d="M4.5 6.5 8 10l3.5-3.5" />
+      <path d="M2.5 13.5h11" />
+    </Svg>
+  )
+}
+
+/** Ask Google again. A cycle drawn as brackets, not a rounded arrow. */
+export function IconSync(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 8a5.5 5.5 0 0 1 9.4-3.9" />
+      <path d="M13.5 8a5.5 5.5 0 0 1-9.4 3.9" />
+      <path d="M12 1.5v3h-3" />
+      <path d="M4 14.5v-3h3" />
+    </Svg>
+  )
+}
+
 /** The audit, mid-flight. Paired with a pulse, never spun. */
 export function IconPulse(props: IconProps) {
   return (

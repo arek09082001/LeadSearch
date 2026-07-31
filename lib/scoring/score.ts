@@ -124,6 +124,82 @@ export interface StoredScore {
   breakdown: ScoreBreakdown | null
 }
 
+/* ------------------------------------------------------------------------- *
+ * Movement
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How a score changed, and which faults changed it.
+ *
+ * `lead_scores` has been append-only from the first migration precisely so this
+ * question can be asked, and until now nothing asked it. The case that forced
+ * it: a lead sitting at 94 because it had no website, refreshed, found to have
+ * built one, re-audited, and now sitting at 31. The number is right. On its own
+ * it is also useless — the operator remembers a 94 and finds a 31, with no way
+ * to tell a fixed website from a bug in the scorer.
+ *
+ * So the movement carries the faults that went away and the ones that arrived.
+ * `no_website` disappearing from `fixed` IS the sentence "they built a website",
+ * said in the vocabulary the rest of the product already speaks, and derived
+ * from the stored arithmetic rather than from a second record of what happened.
+ */
+export interface ScoreMovement {
+  /** The score before. Null when it was withheld, which is not the same as zero. */
+  from: number | null
+  to: number | null
+  /** to − from. Null when either side is withheld and the subtraction is meaningless. */
+  delta: number | null
+  when: string
+  /** Faults that were on the old score and are not on the new one. Worst first. */
+  fixed: ScoreFactor[]
+  /** Faults that are on the new score and were not on the old one. Worst first. */
+  appeared: ScoreFactor[]
+  /** True when the two scores were computed under different config versions. */
+  configChanged: boolean
+}
+
+/**
+ * Compare two stored scores.
+ *
+ * Returns null when there is nothing to say: no previous score, or a previous
+ * one whose breakdown is too old a shape to read. A movement that cannot name
+ * its faults is worse than no movement panel — it invites the operator to read
+ * a delta as a diagnosis.
+ */
+export function compareScores(
+  previous: StoredScore | null,
+  current: StoredScore | null,
+): ScoreMovement | null {
+  if (!previous || !current) return null
+  if (!previous.breakdown || !current.breakdown) return null
+  if (previous.id === current.id) return null
+
+  const before = new Map(previous.breakdown.factors.map((factor) => [factor.code, factor]))
+  const after = new Map(current.breakdown.factors.map((factor) => [factor.code, factor]))
+
+  const fixed = previous.breakdown.factors.filter((factor) => !after.has(factor.code))
+  const appeared = current.breakdown.factors.filter((factor) => !before.has(factor.code))
+
+  const sameScore = previous.score === current.score
+  const configChanged = previous.configVersion !== current.configVersion
+
+  // A re-score that changed nothing and found nothing is not news. Saying "no
+  // change since June" on every lead in the book would be one more line to read
+  // past on every page.
+  if (sameScore && !fixed.length && !appeared.length) return null
+
+  return {
+    from: previous.score,
+    to: current.score,
+    delta:
+      previous.score === null || current.score === null ? null : current.score - previous.score,
+    when: current.computedAt,
+    fixed: [...fixed].sort(worstFirst),
+    appeared: [...appeared].sort(worstFirst),
+    configChanged,
+  }
+}
+
 function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value))
 }

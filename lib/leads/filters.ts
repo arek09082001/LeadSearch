@@ -1,11 +1,13 @@
 import {
   AUDIT_FILTERS,
+  CHANGE_FILTER_KEYS,
   COLD_SCORE_FLOOR,
   DEFAULT_FILTERS,
   FOLLOW_UP_FILTERS,
   LEAD_SORTS,
   LEAD_STATUSES,
   type AuditFilter,
+  type ChangeFilter,
   type FollowUpFilter,
   type LeadFilters,
   type LeadSort,
@@ -76,6 +78,7 @@ export function parseFilters(source: ParamSource): LeadFilters {
       readAll(source, 'audit'),
       AUDIT_FILTERS.map((entry) => entry.key),
     ),
+    change: only<ChangeFilter>(readAll(source, 'chg'), CHANGE_FILTER_KEYS),
     followUp:
       followUp && FOLLOW_UP_FILTERS.some((entry) => entry.key === followUp)
         ? (followUp as FollowUpFilter)
@@ -161,6 +164,7 @@ export function toSearchParams(filters: LeadFilters): URLSearchParams {
   if (filters.scoreMin !== null) params.set('smin', String(filters.scoreMin))
   if (filters.scoreMax !== null) params.set('smax', String(filters.scoreMax))
   for (const audit of filters.audit) params.append('audit', audit)
+  for (const change of filters.change) params.append('chg', change)
   if (filters.followUp) params.set('due', filters.followUp)
   if (filters.sort !== DEFAULT_FILTERS.sort) params.set('sort', filters.sort)
   if (filters.desc !== naturalDesc(filters.sort)) params.set('dir', filters.desc ? 'desc' : 'asc')
@@ -192,6 +196,7 @@ export function activeFilterCount(filters: LeadFilters): number {
     (filters.scoreMin !== null ? 1 : 0) +
     (filters.scoreMax !== null ? 1 : 0) +
     filters.audit.length +
+    filters.change.length +
     (filters.followUp ? 1 : 0)
   )
 }

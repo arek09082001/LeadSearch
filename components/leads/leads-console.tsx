@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { IconAlert, IconPulse, IconStrike, IconUndo } from '@/components/icons'
 import { BulkBar } from '@/components/leads/bulk-bar'
 import { EmptyLibrary, EmptyResult } from '@/components/leads/empty-library'
+import { ExportCsv } from '@/components/leads/export-csv'
 import { FilterBar } from '@/components/leads/filter-bar'
 import { LeadsTable } from '@/components/leads/leads-table'
 import { SavedViews } from '@/components/leads/saved-views'
@@ -321,6 +322,12 @@ export function LeadsConsole({
           </span>
         ) : null}
 
+        {/*
+          The export takes the query string this page was drawn from, so the
+          file is this view and cannot be anything else.
+        */}
+        <ExportCsv query={query} count={listing.total} />
+
         <button
           type="button"
           onClick={() => navigate({ ...filters, deleted: !filters.deleted, page: 1 })}
@@ -407,6 +414,7 @@ export function LeadsConsole({
                 scoreMin: null,
                 scoreMax: null,
                 audit: [],
+                change: [],
                 followUp: null,
                 page: 1,
               })
