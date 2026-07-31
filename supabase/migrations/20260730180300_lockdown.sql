@@ -39,4 +39,19 @@ alter default privileges in schema public revoke all on functions from anon, aut
 
 -- Layer 3 — the kill switch. Without USAGE on the schema, a leaked publishable
 -- key cannot even name these tables.
+--
+-- The revoke from PUBLIC is the load-bearing half, and leaving it out is the
+-- easy mistake: Postgres grants USAGE on `public` to the PUBLIC pseudo-role by
+-- default, and every role inherits it. Revoking from `anon` and `authenticated`
+-- alone removes their own grants and changes nothing, because the blanket grant
+-- underneath is still there — `has_schema_privilege('anon','public','USAGE')`
+-- keeps answering true and the layer is inert.
+--
+-- The two grants come first so the revoke cannot lock out the roles that have
+-- to reach these tables. Both already hold on a Supabase project; restating them
+-- makes this file correct on its own rather than dependent on what the platform
+-- happened to set up.
+grant usage on schema public to postgres, service_role;
+
+revoke usage on schema public from public;
 revoke usage on schema public from anon, authenticated;
