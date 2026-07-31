@@ -1,11 +1,14 @@
 import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
+import { LeadActions } from '@/components/leads/lead-actions'
+import { LeadTimeline } from '@/components/leads/lead-timeline'
 import { ReAudit } from '@/components/leads/re-audit'
 import { ScoreBreakdown } from '@/components/leads/score-breakdown'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
+import { shortDate, timestamp } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
 import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
 
@@ -24,18 +27,6 @@ import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
  * already has a valid certificate is what keeps him from opening a call with
  * something the owner can immediately disprove.
  */
-
-function fullDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}, ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function shortDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
-}
 
 function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`
@@ -167,7 +158,7 @@ function yesNo(value: boolean | null): string | null {
  */
 function Measurements({ audit }: { audit: LeadAudit }) {
   const observed: [string, string | null][] = [
-    ['Checked', fullDate(audit.auditedAt)],
+    ['Checked', timestamp(audit.auditedAt)],
     ['Checker', audit.checkerVersion],
     ['Took', audit.durationMs === null ? null : seconds(audit.durationMs)],
     ['URL', audit.websiteUrl],
@@ -220,7 +211,7 @@ function Measurements({ audit }: { audit: LeadAudit }) {
  * ------------------------------------------------------------------------- */
 
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history, score } = detail
+  const { lead, audit, history, score, timeline } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -244,8 +235,12 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
 
         <h1 className="mt-1 text-lg font-semibold text-ink">{lead.name}</h1>
 
+        {/*
+          The status used to be printed here as a word. It is a control now and
+          lives in the band below, with the date and the note beside it — the
+          header is who they are, not where he is with them.
+        */}
         <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-data text-micro text-ink-faint">
-          <span className="label text-ink-dim">{lead.status}</span>
           {lead.formattedAddress ? <span>{lead.formattedAddress}</span> : null}
           {lead.phone ? <a href={`tel:${lead.phone}`} className="text-ink-dim">{lead.phone}</a> : null}
           {lead.website ? (
@@ -265,6 +260,8 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
           <span>saved {shortDate(lead.savedAt)}</span>
         </div>
       </header>
+
+      <LeadActions lead={lead} />
 
       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem]">
         <section className="min-w-0">
@@ -328,6 +325,15 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
               ) : null}
             </>
           )}
+
+          {/*
+            The history sits under the diagnosis rather than in the aside, and
+            below it rather than above: the faults are why he is calling, and
+            what happened last time is what he checks immediately after. Both
+            are the left-hand column because both are things he reads out; the
+            aside is for numbers he checks against.
+          */}
+          <LeadTimeline entries={timeline} />
         </section>
 
         <aside className="min-w-0 border-t border-rule lg:border-l lg:border-t-0">

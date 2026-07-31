@@ -1,8 +1,12 @@
 import 'server-only'
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { today } from '@/lib/leads/dates'
 import {
+  COLD_SCORE_FLOOR,
   PAGE_SIZE,
+  QUEUE_PAGE_SIZE,
+  type ActivityType,
   type AuditFinding,
   type AuditSummary,
   type BulkAction,
@@ -15,10 +19,12 @@ import {
   type LeadListing,
   type LeadRow,
   type LeadStatus,
+  type OutreachQueues,
   type PsiState,
   type SaveRequest,
   type SaveResult,
   type SaveResultItem,
+  type TimelineEntry,
   type WebsiteStatus,
 } from '@/lib/leads/types'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
@@ -134,13 +140,6 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
     noteCount: record.note_count ?? 0,
   }
-}
-
-/** `2026-07-30`, in the operator's own day rather than UTC's. */
-function today(offsetDays = 0): string {
-  const now = new Date()
-  now.setDate(now.getDate() + offsetDays)
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
 const SORT_COLUMNS: Record<LeadFilters['sort'], string> = {
@@ -304,6 +303,86 @@ export async function queryLeadIds(filters: LeadFilters, limit = 5000): Promise<
 
   if (error) throw new Error(`Could not resolve the selection: ${error.message}`)
   return ((data ?? []) as { id: string }[]).map((row) => row.id)
+}
+
+/* ------------------------------------------------------------------------- *
+ * The outreach queues
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Who is due, and who is worth ringing cold.
+ *
+ * Two questions, deliberately not expressed as saved views over `queryLeads`:
+ * the book answers "which of my leads match this", and this answers "what am I
+ * doing this morning". The second is a plan, so it is ordered by urgency rather
+ * than by score, and it is allowed to be a fixed query nobody can filter into
+ * uselessness.
+ *
+ * `due` takes every non-deleted lead whose date has arrived, including ones
+ * already marked won or lost. A date on a closed lead is still a date he set
+ * himself, and dropping it silently would lose the reminder rather than the
+ * lead.
+ */
+export async function readOutreachQueues(): Promise<OutreachQueues> {
+  const supabase = createServiceClient()
+  const now = today()
+
+  const due = supabase
+    .from('leads_library')
+    .select(LIBRARY_COLUMNS, { count: 'exact' })
+    .is('deleted_at', null)
+    // A null date is not "before today" to Postgres either, so this predicate
+    // is also what keeps undated leads out of the queue.
+    .lte('follow_up_at', now)
+    // Oldest promise first — the one he has kept waiting longest is the one to
+    // ring. Score only breaks ties inside a single day.
+    .order('follow_up_at', { ascending: true })
+    .order('current_score', { ascending: false, nullsFirst: false })
+    .order('id', { ascending: true })
+    .range(0, QUEUE_PAGE_SIZE - 1)
+
+  const cold = supabase
+    .from('leads_library')
+    .select(LIBRARY_COLUMNS, { count: 'exact' })
+    .is('deleted_at', null)
+    .eq('status', 'new')
+    // Carrying a date means he has already made a plan for it, and that plan is
+    // the `due` queue. This is what keeps the two lists disjoint.
+    .is('follow_up_at', null)
+    .gte('current_score', COLD_SCORE_FLOOR)
+    .order('current_score', { ascending: false, nullsFirst: false })
+    .order('saved_at', { ascending: false })
+    .order('id', { ascending: true })
+    .range(0, QUEUE_PAGE_SIZE - 1)
+
+  const overdue = supabase
+    .from('leads_library')
+    .select('id', { count: 'exact', head: true })
+    .is('deleted_at', null)
+    .lt('follow_up_at', now)
+
+  const [dueResult, coldResult, overdueResult, listNames] = await Promise.all([
+    due,
+    cold,
+    overdue,
+    readListNames(),
+  ])
+
+  if (dueResult.error) throw new Error(`Could not read the due queue: ${dueResult.error.message}`)
+  if (coldResult.error) throw new Error(`Could not read the cold queue: ${coldResult.error.message}`)
+
+  return {
+    due: ((dueResult.data ?? []) as unknown as LibraryRecord[]).map((record) =>
+      toRow(record, listNames),
+    ),
+    cold: ((coldResult.data ?? []) as unknown as LibraryRecord[]).map((record) =>
+      toRow(record, listNames),
+    ),
+    dueTotal: dueResult.count ?? 0,
+    coldTotal: coldResult.count ?? 0,
+    overdueTotal: overdueResult.count ?? 0,
+    coldFloor: COLD_SCORE_FLOOR,
+  }
 }
 
 async function readListNames(): Promise<Map<string, string>> {
@@ -910,9 +989,14 @@ function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
 export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const supabase = createServiceClient()
 
-  // The score is read alongside rather than after: it hangs off the lead, not
-  // off the audit, and a lead with no audit at all can still carry one.
-  const [lead, score] = await Promise.all([readLead(id), readCurrentScore(id)])
+  // The score and the history are read alongside rather than after: both hang
+  // off the lead rather than off the audit, and a lead with no audit at all can
+  // still carry a score, a fortnight of notes and three status changes.
+  const [lead, score, timeline] = await Promise.all([
+    readLead(id),
+    readCurrentScore(id),
+    readTimeline(id),
+  ])
   if (!lead) return null
 
   const { data: audits } = await supabase
@@ -925,7 +1009,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score }
+  if (!newest) return { lead, audit: null, history: [], score, timeline }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -964,7 +1048,87 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score }
+  return { lead, audit: toAudit(newest, findings), history, score, timeline }
+}
+
+/* ------------------------------------------------------------------------- *
+ * The history
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Everything that has happened to a lead, in one sequence.
+ *
+ * Two tables, merged in the application rather than by a view or a union query.
+ * They are small and per-lead, so the join costs nothing here, and keeping them
+ * separate in the database is what lets the status trigger stay a four-line
+ * insert instead of something that has to know about notes.
+ *
+ * The trigger in the permanent-leads migration has been writing `status_change`
+ * rows since the first save. This function is the read path that finally
+ * collects on that — the log needed no backfill, only somebody to ask for it.
+ */
+export async function readTimeline(leadId: string, limit = 200): Promise<TimelineEntry[]> {
+  const supabase = createServiceClient()
+
+  const [notes, activities] = await Promise.all([
+    supabase
+      .from('lead_notes')
+      .select('id, body, created_at, updated_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(limit),
+    supabase
+      .from('lead_activities')
+      .select('id, type, occurred_at, summary, status_before, status_after')
+      .eq('lead_id', leadId)
+      .order('occurred_at', { ascending: false })
+      .limit(limit),
+  ])
+
+  if (notes.error) throw new Error(`Could not read the notes: ${notes.error.message}`)
+  if (activities.error) {
+    throw new Error(`Could not read the outreach log: ${activities.error.message}`)
+  }
+
+  const entries: TimelineEntry[] = [
+    ...((notes.data ?? []) as {
+      id: string
+      body: string
+      created_at: string
+      updated_at: string
+    }[]).map<TimelineEntry>((row) => ({
+      kind: 'note',
+      id: `note:${row.id}`,
+      at: row.created_at,
+      body: row.body,
+      // Only worth saying when it is actually true, so an untouched note does
+      // not carry a caption claiming it was edited the moment it was written.
+      editedAt: row.updated_at > row.created_at ? row.updated_at : null,
+    })),
+    ...((activities.data ?? []) as {
+      id: number
+      type: ActivityType
+      occurred_at: string
+      summary: string | null
+      status_before: LeadStatus | null
+      status_after: LeadStatus | null
+    }[]).map<TimelineEntry>((row) => ({
+      kind: 'activity',
+      id: `activity:${row.id}`,
+      at: row.occurred_at,
+      type: row.type,
+      summary: row.summary,
+      statusBefore: row.status_before,
+      statusAfter: row.status_after,
+    })),
+  ]
+
+  // Newest first, like every other history on the page. The id breaks ties so
+  // two things written in the same millisecond — a status change and the note
+  // explaining it, sent as one request — never swap places between renders.
+  entries.sort((a, b) => (a.at === b.at ? b.id.localeCompare(a.id) : a.at < b.at ? 1 : -1))
+
+  return entries.slice(0, limit)
 }
 
 export async function updateLead(

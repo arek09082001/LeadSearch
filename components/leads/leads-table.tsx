@@ -1,11 +1,14 @@
 'use client'
 
 import Link from 'next/link'
+import type { RefObject } from 'react'
 
 import { IconChevronDown, IconExternal, IconPulse } from '@/components/icons'
-import { SEVERITY_TONE } from '@/components/leads/tone'
+import { SEVERITY_TONE, STATUS_TONE } from '@/components/leads/tone'
+import { ROW_ATTRIBUTE } from '@/components/shell/keys'
 import { Checkbox } from '@/components/ui/controls'
 import { FINDING_SPECS, sortCodes } from '@/lib/enrichment/vocabulary'
+import { shortDate, today } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
 import { type LeadRow, type LeadSort } from '@/lib/leads/types'
 
@@ -45,43 +48,12 @@ const COLUMNS: Column[] = [
   { key: null, label: '', className: 'w-8' },
 ]
 
-/**
- * Status brightness.
- *
- * Not colour: DESIGN.md allows exactly three signal colours and each already
- * means one thing. So a status says how much of the operator's attention it
- * wants through contrast alone — untouched at full ink, in-flight at dim,
- * closed faded back.
- */
-const STATUS_TONE: Record<string, string> = {
-  new: 'text-ink',
-  researching: 'text-ink-dim',
-  contacted: 'text-ink-dim',
-  replied: 'text-ink-dim',
-  proposal: 'text-ink-dim',
-  won: 'text-ink-faint',
-  lost: 'text-ink-faint',
-  parked: 'text-ink-faint',
-}
-
 function hostname(url: string): string {
   try {
     return new URL(url).hostname.replace(/^www\./, '')
   } catch {
     return url
   }
-}
-
-function shortDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
-}
-
-/** `2026-08-14` from a date column, without a timezone shifting it a day. */
-function today(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 }
 
 /** Beyond this the column stops being scannable and starts being a paragraph. */
@@ -99,7 +71,7 @@ const MAX_MARKS = 4
  * Every mark comes from the shared finding vocabulary rather than from logic
  * restated here, so a row and the diagnosis behind it cannot drift apart.
  */
-function AuditMarks({ lead }: { lead: LeadRow }) {
+export function AuditMarks({ lead }: { lead: LeadRow }) {
   if (lead.enrichmentState === 'queued' || lead.enrichmentState === 'running') {
     return (
       <span className="label flex items-center gap-1.5 text-ink-faint">
@@ -203,6 +175,8 @@ export function LeadsTable({
   sort,
   desc,
   onSort,
+  containerRef,
+  onCursor,
 }: {
   rows: LeadRow[]
   selected: Set<string>
@@ -210,6 +184,10 @@ export function LeadsTable({
   sort: LeadSort
   desc: boolean
   onSort: (key: LeadSort) => void
+  /** The scroll box the keyboard cursor searches for rows inside. */
+  containerRef?: RefObject<HTMLDivElement | null>
+  /** Clicking or tabbing to a row moves the cursor there too, so j/k continues from it. */
+  onCursor?: (index: number) => void
 }) {
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
   const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
@@ -223,7 +201,7 @@ export function LeadsTable({
   }
 
   return (
-    <div className="flex-1 overflow-auto">
+    <div ref={containerRef} className="flex-1 overflow-auto">
       <table className="w-full border-collapse text-left">
         <thead className="sticky top-0 z-10">
           <tr className="border-b border-rule-strong bg-ground">
@@ -269,7 +247,7 @@ export function LeadsTable({
         </thead>
 
         <tbody className="divide-y divide-rule">
-          {rows.map((lead) => {
+          {rows.map((lead, index) => {
             const ticked = selected.has(lead.id)
             const due = lead.followUpAt !== null && lead.followUpAt <= now
             const deleted = lead.deletedAt !== null
@@ -277,7 +255,16 @@ export function LeadsTable({
             return (
               <tr
                 key={lead.id}
-                className={`group transition-colors ${
+                /*
+                 * The keyboard cursor is this row's own DOM focus, so j and k
+                 * move the browser's idea of "here" rather than painting a
+                 * second one beside it. `tabIndex={-1}` makes the row a focus
+                 * target without adding a hundred stops to the tab order.
+                 */
+                tabIndex={-1}
+                {...{ [ROW_ATTRIBUTE]: index }}
+                onFocus={() => onCursor?.(index)}
+                className={`group transition-colors focus:bg-raise ${
                   deleted ? 'text-ink-faint' : 'text-ink-dim'
                 } ${ticked ? 'bg-raise' : ''} hover:bg-raise`}
               >

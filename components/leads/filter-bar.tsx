@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { IconClose, IconFilter, IconSearch } from '@/components/icons'
+import { SEARCH_ATTRIBUTE } from '@/components/shell/keys'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuCheck, MenuItem, MenuLabel } from '@/components/ui/controls'
 import { activeFilterCount } from '@/lib/leads/filters'
@@ -144,8 +145,17 @@ export function FilterBar({
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search the book"
           aria-label="Search saved leads by name"
+          // What `/` reaches for. One attribute, so the key needs no knowledge
+          // of which surface it is on or what that surface calls its search.
+          {...{ [SEARCH_ATTRIBUTE]: '' }}
           className={`${INPUT} pl-8`}
         />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 font-data text-micro text-ink-faint"
+        >
+          /
+        </span>
       </div>
 
       <FacetMenu

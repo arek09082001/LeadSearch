@@ -28,6 +28,19 @@ export const LEAD_STATUSES = [
 
 export type LeadStatus = (typeof LEAD_STATUSES)[number]
 
+/** Mirrors public.activity_type. `status_change` is written by a trigger, never by hand. */
+export const ACTIVITY_TYPES = [
+  'call',
+  'email',
+  'message',
+  'visit',
+  'meeting',
+  'status_change',
+  'other',
+] as const
+
+export type ActivityType = (typeof ACTIVITY_TYPES)[number]
+
 /** Mirrors public.website_status. */
 export type WebsiteStatus = 'no_website' | 'unreachable' | 'reachable' | 'error'
 
@@ -313,6 +326,45 @@ export interface SavedView {
 }
 
 /* ------------------------------------------------------------------------- *
+ * The outreach queues
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The score at or above which a lead nobody has touched is worth a cold call.
+ *
+ * PRODUCT.md refused to invent this and the operator has now set it: the cold
+ * queue is high scorers still at `new`. 60 is where it lands against the
+ * shipped config — `no_website` alone on an established business reaches 69, so
+ * the queue fills with absence and near-absence rather than with sites that
+ * merely failed a handful of hygiene checks.
+ *
+ * One constant, stated on the surface that uses it, so moving it is an edit
+ * here and not an argument with a query.
+ */
+export const COLD_SCORE_FLOOR = 60
+
+/** How many rows of each queue are drawn. The counts beside them are exact. */
+export const QUEUE_PAGE_SIZE = 100
+
+/**
+ * The two worklists, and the totals behind them.
+ *
+ * `due` and `cold` are disjoint by construction — a lead carrying a follow-up
+ * date is never in `cold`, whatever it scores — because a queue that lists the
+ * same business twice is a queue the operator stops trusting to be a plan.
+ */
+export interface OutreachQueues {
+  due: LeadRow[]
+  cold: LeadRow[]
+  dueTotal: number
+  coldTotal: number
+  /** The subset of `dueTotal` whose date passed before today. */
+  overdueTotal: number
+  /** Echoed rather than imported by the view, so the surface can say the number. */
+  coldFloor: number
+}
+
+/* ------------------------------------------------------------------------- *
  * The diagnosis
  * ------------------------------------------------------------------------- */
 
@@ -375,12 +427,48 @@ export interface AuditSummary {
   psiPerformance: number | null
 }
 
+/* ------------------------------------------------------------------------- *
+ * The history
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One thing that happened to a lead, from either of the two tables that record
+ * one — a note he wrote, or an entry in the outreach log.
+ *
+ * A discriminated union rather than a flattened row with half its fields null,
+ * because the renderer has to say something different about each: a note is
+ * prose to read, a status change is two words and an arrow. The `at` field is
+ * common on purpose — it is the only thing the merge sorts on, and the whole
+ * point of this type is that the two sources arrive as one sequence.
+ */
+export type TimelineEntry =
+  | { kind: 'note'; id: string; at: string; body: string; editedAt: string | null }
+  | {
+      kind: 'activity'
+      id: string
+      at: string
+      type: ActivityType
+      summary: string | null
+      /** Both set on a `status_change`; the transition is the content of the row. */
+      statusBefore: LeadStatus | null
+      statusAfter: LeadStatus | null
+    }
+
 export interface LeadDetail {
   lead: LeadRow
   /** The newest audit, in full. Null when nothing has audited this lead yet. */
   audit: LeadAudit | null
   /** Every audit before it, newest first. History is the point of re-running. */
   history: AuditSummary[]
+  /**
+   * Notes and outreach log, merged and newest first.
+   *
+   * One sequence rather than two lists: a note written the day after a status
+   * moved to `contacted` is the explanation for that move, and separating them
+   * into parallel columns makes the operator reconstruct the order himself —
+   * which is exactly the work principle 4 says the page owes him.
+   */
+  timeline: TimelineEntry[]
   /**
    * The score on the lead, with the arithmetic that produced it.
    *

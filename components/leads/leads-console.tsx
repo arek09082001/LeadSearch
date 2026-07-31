@@ -9,6 +9,7 @@ import { EmptyLibrary, EmptyResult } from '@/components/leads/empty-library'
 import { FilterBar } from '@/components/leads/filter-bar'
 import { LeadsTable } from '@/components/leads/leads-table'
 import { SavedViews } from '@/components/leads/saved-views'
+import { useRowCursor } from '@/components/shell/keys'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { CommandButton } from '@/components/ui/command-button'
 import { filtersToHref, naturalDesc, toSearchParams } from '@/lib/leads/filters'
@@ -223,6 +224,37 @@ export function LeadsConsole({
     return () => clearInterval(timer)
   }, [pendingAudits, router])
 
+  /*
+   * The keyboard, over the rows on screen.
+   *
+   * `s` ticks the row under the cursor into the selection — on the book,
+   * putting a lead aside is what precedes every action there is, and the bulk
+   * bar above the table is where those actions live. Enter opens the lead;
+   * Escape drops the cursor and the selection with it, which is the one gesture
+   * that gets him back to a clean table without reaching for the mouse.
+   */
+  const { containerRef, setCursor } = useRowCursor({
+    count: listing.rows.length,
+    onOpen: (index) => {
+      const lead = listing.rows[index]
+      if (lead) router.push(`/leads/${lead.id}`)
+    },
+    onSave: (index) => {
+      const lead = listing.rows[index]
+      if (!lead) return
+      setSelected((previous) => {
+        const next = new Set(previous)
+        if (next.has(lead.id)) next.delete(lead.id)
+        else next.add(lead.id)
+        return next
+      })
+    },
+    onEscape: () => {
+      setSelected(new Set())
+      setWholeFilter(false)
+    },
+  })
+
   const oldest = useMemo(() => {
     if (!listing.rows.length) return null
     return listing.rows.reduce(
@@ -258,6 +290,16 @@ export function LeadsConsole({
             Auditing {pendingAudits}
           </span>
         ) : null}
+
+        {/* The map, where a keyboard exists to use it. First thing to drop on a
+            narrow screen — a phone has neither the keys nor the room. */}
+        <span
+          aria-hidden="true"
+          className="hidden font-data text-micro text-ink-faint xl:inline"
+          title="j and k move, enter opens the lead, s selects it, / searches, escape clears"
+        >
+          j k · enter · s · /
+        </span>
 
         {/* Principle 5: the Google-sourced columns on these rows state their age. */}
         {oldest ? (
@@ -370,6 +412,8 @@ export function LeadsConsole({
             sort={filters.sort}
             desc={filters.desc}
             onSort={onSort}
+            containerRef={containerRef}
+            onCursor={setCursor}
           />
 
           {pages > 1 ? (
