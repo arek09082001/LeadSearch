@@ -448,6 +448,24 @@ export function LeadsMap({
           }
         : EMPTY_COLLECTION,
     )
+
+    /*
+     * A mark chosen somewhere other than the canvas brings the canvas to it.
+     *
+     * The rail beside the field is a list of results the map may not be looking
+     * at — sorted by rating, it opens with a business three towns over — and a
+     * row that rings a mark nobody can see is a click that appears to do
+     * nothing. Only when it is genuinely off screen, and only a pan: clicking a
+     * pin that is already in view must not jolt the field out from under the
+     * pointer, and changing the zoom would throw away the frame the operator
+     * chose. `moveend` then re-reads the book for the new box, as it does for
+     * any other movement.
+     */
+    const map = mapRef.current
+    if (!map || !focus) return
+    if (!map.getBounds().contains([focus.lng, focus.lat])) {
+      map.easeTo({ center: [focus.lng, focus.lat], duration: 400 })
+    }
   }, [ready, focus, setData])
 
   /* --- The three controls the canvas cannot provide ---------------------- */

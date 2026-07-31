@@ -5,6 +5,7 @@ import { Checkbox, SelectionCell } from '@/components/ui/controls'
 import { cursorProps } from '@/components/ui/use-list-keys'
 import type { RowSelection } from '@/components/ui/use-row-selection'
 import { formatPlaceType } from '@/lib/places-types'
+import type { SortKey, SortState } from '@/lib/search/sort'
 import type { SearchRow } from '@/lib/search/types'
 
 /*
@@ -28,22 +29,10 @@ import type { SearchRow } from '@/lib/search/types'
  * something actually breaks.
  */
 
-export type SortKey = 'rank' | 'name' | 'rating' | 'reviews' | 'web'
-
-export interface SortState {
-  key: SortKey
-  desc: boolean
-}
-
-/** Google's own order, which is the order the operator asked for. */
-export const RANK_SORT: SortState = { key: 'rank', desc: false }
-
 interface Column {
   key: SortKey | null
   label: string
   className: string
-  /** Numeric columns sort high-to-low first; text sorts A-to-Z first. */
-  descFirst?: boolean
 }
 
 const COLUMNS: Column[] = [
@@ -53,8 +42,8 @@ const COLUMNS: Column[] = [
   { key: 'rank', label: '#', className: 'w-10 text-right' },
   { key: 'name', label: 'Business', className: 'min-w-[14rem]' },
   { key: null, label: 'Category', className: 'hidden w-40 xl:table-cell' },
-  { key: 'rating', label: 'Rating', className: 'w-16 text-right', descFirst: true },
-  { key: 'reviews', label: 'Reviews', className: 'w-20 text-right', descFirst: true },
+  { key: 'rating', label: 'Rating', className: 'w-16 text-right' },
+  { key: 'reviews', label: 'Reviews', className: 'w-20 text-right' },
   { key: 'web', label: 'Website', className: 'w-44' },
   { key: null, label: 'Phone', className: 'hidden w-36 lg:table-cell' },
   { key: null, label: 'Address', className: 'hidden min-w-[12rem] md:table-cell' },
@@ -68,45 +57,6 @@ function hostname(url: string): string {
   } catch {
     return url
   }
-}
-
-/**
- * The rows in the order they are drawn.
- *
- * Lifted out of the component with the sort state, because the row ORDER is
- * what a range selection and a keyboard cursor are both expressed in — the
- * surface that owns those has to own this, or "the eight rows between these
- * two" means one thing to the table and another to everything else.
- */
-export function sortRows(rows: SearchRow[], sort: SortState): SearchRow[] {
-  const copy = rows.map((row, index) => ({ row, index }))
-  const direction = sort.desc ? -1 : 1
-
-  copy.sort((a, b) => {
-    switch (sort.key) {
-      case 'name':
-        return direction * (a.row.name ?? '').localeCompare(b.row.name ?? '', 'de')
-      case 'rating':
-        // No rating is not a zero rating; unrated businesses sink either way
-        // rather than pretending to be the worst-reviewed in town.
-        return direction * ((a.row.rating ?? -1) - (b.row.rating ?? -1))
-      case 'reviews':
-        return direction * ((a.row.userRatingCount ?? -1) - (b.row.userRatingCount ?? -1))
-      case 'web':
-        // The one sort the product exists for: no-website first.
-        return direction * (Number(Boolean(a.row.website)) - Number(Boolean(b.row.website)))
-      default:
-        return direction * (a.index - b.index)
-    }
-  })
-
-  return copy.map((entry) => entry.row)
-}
-
-/** Clicking the active column flips it; a new one starts where it is useful. */
-export function nextSort(prev: SortState, key: SortKey): SortState {
-  if (prev.key === key) return { key, desc: !prev.desc }
-  return { key, desc: Boolean(COLUMNS.find((column) => column.key === key)?.descFirst) }
 }
 
 /*
