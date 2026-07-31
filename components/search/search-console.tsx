@@ -1,15 +1,23 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
 import { IconAlert, IconCeiling } from '@/components/icons'
 import { CostReadout } from '@/components/search/cost-readout'
-import { ResultsTable } from '@/components/search/results-table'
+import {
+  RANK_SORT,
+  ResultsTable,
+  nextSort,
+  sortRows,
+  type SortKey,
+} from '@/components/search/results-table'
 import { SaveBar } from '@/components/search/save-bar'
 import { SearchForm } from '@/components/search/search-form'
 import { useSearchStream } from '@/components/search/use-search-stream'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { EmptyState, ErrorState, LoadingRows } from '@/components/ui/states'
+import { useListKeys } from '@/components/ui/use-list-keys'
+import { useRowSelection } from '@/components/ui/use-row-selection'
 import type { BudgetState, SearchInput } from '@/lib/search/types'
 
 /*
@@ -34,17 +42,48 @@ function age(iso: string): string {
 export function SearchConsole({ initialBudget }: { initialBudget: BudgetState }) {
   const { state, run, cancel, setBudget, markSaved } = useSearchStream(initialBudget)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [sort, setSort] = useState(RANK_SORT)
+  /** Where the keyboard is in the table. -1 is nowhere, which is where it starts. */
+  const [cursor, setCursor] = useState(-1)
   const running = state.status === 'running'
+
+  /*
+   * The sort lives here rather than in the table for the same reason the
+   * selection does: a range is "the rows between these two AS DRAWN", so
+   * whatever decides the drawing order has to be the thing the range and the
+   * cursor are counted in.
+   */
+  const rows = useMemo(() => sortRows(state.rows, sort), [state.rows, sort])
+  const ids = useMemo(() => rows.map((row) => row.providerPlaceId), [rows])
+  const selection = useRowSelection({ ids, selected, onSelect: setSelected })
+
+  // A page arriving mid-stream only ever appends, so a cursor stays where it
+  // was. A new search does not, and the guard below is what catches that.
+  const cursorIndex = cursor < rows.length ? cursor : -1
 
   const onSubmit = useCallback(
     (input: SearchInput) => {
       // A new search invalidates the old selection. Carrying ticks across two
       // result sets would let the operator save businesses he can no longer see.
       setSelected(new Set())
+      setCursor(-1)
       void run(input)
     },
     [run],
   )
+
+  useListKeys({
+    count: rows.length,
+    cursor: cursorIndex,
+    onCursor: setCursor,
+    onToggle: selection.toggleAt,
+    onExtend: selection.extendTo,
+    onSelectAll: () => selection.setAll(selected.size < rows.length),
+    onEscape: () => {
+      if (selected.size) selection.clear()
+      else setCursor(-1)
+    },
+  })
 
   const detail = (() => {
     if (state.rows.length === 0) return running ? 'Fetching…' : 'No fetch this session'
@@ -70,6 +109,12 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
       ) : null}
 
       <StatusStrip provenance="live" detail={detail}>
+        {state.rows.length > 0 ? (
+          <span className="hidden font-data text-micro text-ink-faint lg:inline">
+            j/k move · x tick · ⇧j/k run · a all
+          </span>
+        ) : null}
+
         {state.cachedAt ? (
           <span className="label text-ink-faint" title="Replayed from an earlier identical search — no API call, no cost">
             Replayed
@@ -144,12 +189,16 @@ export function SearchConsole({ initialBudget }: { initialBudget: BudgetState })
           body="Nothing was fetched and the run was recorded with its error. Check the query and the API key, then try again."
           detail={state.error ?? undefined}
         />
-      ) : state.rows.length > 0 ? (
+      ) : rows.length > 0 ? (
         <ResultsTable
-          rows={state.rows}
+          rows={rows}
           running={running}
           selected={selected}
-          onSelect={setSelected}
+          selection={selection}
+          sort={sort}
+          onSort={(key: SortKey) => setSort((prev) => nextSort(prev, key))}
+          cursor={cursorIndex}
+          onCursor={setCursor}
         />
       ) : running ? (
         <LoadingRows rows={14} label="Fetching results" />

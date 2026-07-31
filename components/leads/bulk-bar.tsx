@@ -48,7 +48,18 @@ export function BulkBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-rule border-l border-l-signal bg-panel px-2 py-2 md:px-3">
-      <span className="label shrink-0 text-signal">{count} selected</span>
+      {/*
+        Announced, because the count is the only feedback for a gesture that can
+        take forty rows at once — a shift-click or a drag moves no focus and a
+        screen reader would otherwise report nothing at all.
+      */}
+      <span role="status" className="label shrink-0 text-signal">
+        {count} selected
+      </span>
+
+      <span className="hidden font-data text-micro text-ink-faint lg:inline">
+        ⇧click a second box for the run between
+      </span>
 
       {/*
         Only offered when it would actually widen the selection. On a library

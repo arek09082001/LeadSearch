@@ -5,8 +5,9 @@ import Link from 'next/link'
 import { IconChevronDown, IconExternal, IconPulse } from '@/components/icons'
 import { ChangeMarks } from '@/components/leads/change-marks'
 import { SEVERITY_TONE } from '@/components/leads/tone'
-import { Checkbox } from '@/components/ui/controls'
+import { Checkbox, SelectionCell } from '@/components/ui/controls'
 import { cursorProps } from '@/components/ui/use-list-keys'
+import type { RowSelection } from '@/components/ui/use-row-selection'
 import { FINDING_SPECS, sortCodes } from '@/lib/enrichment/vocabulary'
 import { shortDate, today } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
@@ -197,7 +198,7 @@ function AuditMarks({ lead }: { lead: LeadRow }) {
 export function LeadsTable({
   rows,
   selected,
-  onSelect,
+  selection,
   sort,
   desc,
   onSort,
@@ -206,7 +207,8 @@ export function LeadsTable({
 }: {
   rows: LeadRow[]
   selected: Set<string>
-  onSelect: (next: Set<string>) => void
+  /** Every way a row can be ticked. Owned by the console, with the keyboard. */
+  selection: RowSelection
   sort: LeadSort
   desc: boolean
   onSort: (key: LeadSort) => void
@@ -217,13 +219,6 @@ export function LeadsTable({
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
   const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
   const now = today()
-
-  function toggleRow(id: string, checked: boolean) {
-    const next = new Set(selected)
-    if (checked) next.add(id)
-    else next.delete(id)
-    onSelect(next)
-  }
 
   return (
     <div className="flex-1 overflow-auto">
@@ -237,6 +232,11 @@ export function LeadsTable({
                   key={column.label || `col-${index}`}
                   scope="col"
                   aria-sort={active ? (desc ? 'descending' : 'ascending') : undefined}
+                  title={
+                    index === 0
+                      ? 'a — every lead on the page. Shift-click or drag a box below to take a run.'
+                      : undefined
+                  }
                   className={`label px-2 py-1.5 font-semibold ${column.className}`}
                 >
                   {index === 0 ? (
@@ -244,9 +244,7 @@ export function LeadsTable({
                       checked={allSelected}
                       indeterminate={someSelected}
                       disabled={rows.length === 0}
-                      onChange={(checked) =>
-                        onSelect(checked ? new Set(rows.map((row) => row.id)) : new Set())
-                      }
+                      onChange={(checked) => selection.setAll(checked)}
                       label={allSelected ? 'Clear selection' : 'Select every lead on this page'}
                     />
                   ) : column.key ? (
@@ -290,20 +288,18 @@ export function LeadsTable({
                   deleted ? 'text-ink-faint' : 'text-ink-dim'
                 } ${ticked ? 'bg-raise' : ''} ${cursored ? `bg-raise ${CURSOR_RING}` : ''} hover:bg-raise`}
               >
-                <td
-                  className={`py-1.5 pl-3 ${
+                <SelectionCell
+                  index={index}
+                  selection={selection}
+                  checked={ticked}
+                  label={`Select ${lead.name}`}
+                  className={
                     // The amber rule marks this as the book, the same way the
                     // feed uses it to mark rows that are already in it. A row
                     // in the bin loses it: it is not currently a record.
                     deleted ? 'border-l border-transparent' : 'border-l border-signal'
-                  }`}
-                >
-                  <Checkbox
-                    checked={ticked}
-                    onChange={(checked) => toggleRow(lead.id, checked)}
-                    label={`Select ${lead.name}`}
-                  />
-                </td>
+                  }
+                />
 
                 <td className="px-2 py-1.5 text-right font-data text-sm">
                   {lead.score === null ? (

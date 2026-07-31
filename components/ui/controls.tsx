@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { IconCheck, IconChevronDown, IconMinus } from '@/components/icons'
+import type { RowSelection } from '@/components/ui/use-row-selection'
 
 /*
  * The controls the library needs that the search surface did not.
@@ -97,6 +98,43 @@ export function Checkbox({
         )
       ) : null}
     </span>
+  )
+}
+
+/**
+ * The first cell of a row: the box, and everything that can be done to it.
+ *
+ * The target is the whole cell rather than the 14px box inside it. A row is
+ * 30px tall in this product and the operator is aiming at sixty of them in a
+ * minute; a target the size of the glyph is the reason selection felt like
+ * work. A `label` is what makes the padding clickable — one control, one
+ * accessible name, no second click handler racing the input's own.
+ *
+ * `select-none` because the two gestures that live here — shift for a range,
+ * drag for a run — are also the browser's two ways of highlighting text, and a
+ * table left striped with blue after taking twenty rows looks broken.
+ */
+export function SelectionCell({
+  index,
+  selection,
+  checked,
+  label,
+  className = '',
+}: {
+  /** Position in the row order the selection was built from. */
+  index: number
+  selection: RowSelection
+  checked: boolean
+  label: string
+  /** The row's own left-edge treatment — the saved rule, or the lack of one. */
+  className?: string
+}) {
+  return (
+    <td className={`p-0 ${className}`} {...selection.cellProps(index)}>
+      <label className="flex cursor-pointer items-center py-1.5 pr-2 pl-3 select-none">
+        <Checkbox checked={checked} onChange={() => selection.pick(index)} label={label} />
+      </label>
+    </td>
   )
 }
 
