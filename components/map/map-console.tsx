@@ -10,10 +10,14 @@ import { SavedViews } from '@/components/leads/saved-views'
 import { MapLegend } from '@/components/map/map-legend'
 import { MapPanel } from '@/components/map/map-panel'
 import { MapSearch } from '@/components/map/map-search'
+import { ResultsDrawer } from '@/components/map/results-drawer'
 import { CostReadout } from '@/components/search/cost-readout'
+import { RANK_SORT, sortRows } from '@/components/search/results-table'
 import { SaveBar } from '@/components/search/save-bar'
 import { useSearchStream } from '@/components/search/use-search-stream'
 import { StatusStrip } from '@/components/shell/status-strip'
+import { useListKeys } from '@/components/ui/use-list-keys'
+import { useRowSelection } from '@/components/ui/use-row-selection'
 import { boundsToSearchParams } from '@/lib/leads/bounds'
 import { activeFilterCount, filtersToHref, sameFilters, toSearchParams } from '@/lib/leads/filters'
 import type {
@@ -136,6 +140,10 @@ export function MapConsole({
   const [category, setCategory] = useState('')
   const [words, setWords] = useState('')
   const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set())
+  const [sort, setSort] = useState(RANK_SORT)
+  /** Where the keyboard is in the results drawer. -1 is nowhere, where it starts. */
+  const [cursor, setCursor] = useState(-1)
+  const [listOpen, setListOpen] = useState(true)
 
   /*
    * Choosing a trade writes its name into the words field.
@@ -251,6 +259,30 @@ export function MapConsole({
     [state.rows],
   )
 
+  /*
+   * The feed, in the order the drawer draws it.
+   *
+   * Sorting lives here rather than in the drawer for the reason the selection
+   * does: a shift-click range is "the rows between these two AS DRAWN", so
+   * whatever decides the drawing order has to be the thing the range and the
+   * cursor are counted in. The map does not care about the order, but it shares
+   * the selection with a table that does.
+   */
+  const resultRows = useMemo(() => sortRows(state.rows, sort), [state.rows, sort])
+  const resultIds = useMemo(
+    () => resultRows.map((row) => row.providerPlaceId),
+    [resultRows],
+  )
+  const selection = useRowSelection({
+    ids: resultIds,
+    selected: selectedResults,
+    onSelect: setSelectedResults,
+  })
+
+  // A page arriving mid-stream only ever appends, so a cursor stays where it
+  // was. A new search does not, and the guard below is what catches that.
+  const cursorIndex = cursor < resultRows.length ? cursor : -1
+
   const onOpenLead = useCallback(
     (id: string) => {
       const point = points.find((entry) => entry.id === id)
@@ -270,22 +302,28 @@ export function MapConsole({
     })
   }, [])
 
+  /** Read a result without deciding about it. What ⏎ in the drawer does. */
+  const readResult = useCallback((placeId: string) => {
+    setFocusResultId(placeId)
+    setFocusLead(null)
+  }, [])
+
   /*
    * Clicking a green mark both selects it and opens it.
    *
-   * Two effects from one gesture, which is normally a smell — but selecting
-   * thirty businesses is the actual job here, and a flow that costs a click to
-   * read and a second click to tick would be a flow nobody uses twice. Both
-   * halves are visible immediately (an amber ring on the mark, the panel beside
-   * it) and both are undone by clicking again.
+   * Two effects from one gesture, which is normally a smell — but a mark on a
+   * field has no tick box beside it, so the click is the only thing it has to
+   * say either with. The drawer below is where the two come apart: a row is
+   * ticked with its box and read with ⏎, the way every other table here works.
+   * Both halves are visible immediately (an amber ring on the mark, the panel
+   * beside it) and both are undone by clicking again.
    */
   const onOpenResult = useCallback(
     (placeId: string) => {
-      setFocusResultId(placeId)
-      setFocusLead(null)
+      readResult(placeId)
       toggleResult(placeId)
     },
-    [toggleResult],
+    [readResult, toggleResult],
   )
 
   const onPickCenter = useCallback((point: Point) => {
@@ -302,6 +340,9 @@ export function MapConsole({
       // surface: they would otherwise save businesses no longer on screen.
       setSelectedResults(new Set())
       setFocusResultId(null)
+      setCursor(-1)
+      // A search is the one thing that is meant to fill this, so it opens.
+      setListOpen(true)
       /*
        * `location` is deliberately never sent: this surface has a point, and a
        * point is what `center` is for. Sending both would ask the provider to
@@ -314,13 +355,34 @@ export function MapConsole({
   )
 
   /*
-   * The keyboard for this surface, which is two keys.
+   * The drawer's keyboard: the same j/k/x/⇧j/a the book's table has.
+   *
+   * `count` is zero while the drawer is shut, which is what silently unbinds
+   * every one of these — pressing `j` over a closed drawer must move nothing.
+   * `onEscape` is deliberately not passed: Escape on this surface has four
+   * things to undo in order, and that ordering lives in one place below rather
+   * than being split across two listeners that would both fire.
+   */
+  useListKeys({
+    count: listOpen ? resultRows.length : 0,
+    cursor: cursorIndex,
+    onCursor: setCursor,
+    onToggle: selection.toggleAt,
+    onExtend: selection.extendTo,
+    onSelectAll: () => selection.setAll(selectedResults.size < resultRows.length),
+    // Reading a row is not deciding about it, so ⏎ opens the panel and leaves
+    // the tick alone. `x` is the key that ticks.
+    onOpen: (index) => readResult(resultIds[index]),
+  })
+
+  /*
+   * The rest of the keyboard for this surface.
    *
    * `s` saves the question as a view, because the views bar above says it does —
    * the same binding the library has, on the same bar, for the same act. Escape
-   * undoes ONE decision at a time, most recent first: the naming field, then the
-   * panel, then the search centre. Undoing the whole session with one press is
-   * what makes an operator stop using Escape.
+   * undoes ONE decision at a time, most recent first: the naming field, the
+   * panel, the ticked results, the cursor, then the search centre. Undoing the
+   * whole session with one press is what makes an operator stop using Escape.
    */
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -332,7 +394,9 @@ export function MapConsole({
         else if (focusLead || focusResultId) {
           setFocusLead(null)
           setFocusResultId(null)
-        } else if (center) setCenter(null)
+        } else if (selectedResults.size) setSelectedResults(new Set())
+        else if (cursor >= 0) setCursor(-1)
+        else if (center) setCenter(null)
         return
       }
 
@@ -350,7 +414,7 @@ export function MapConsole({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [naming, focusLead, focusResultId, center, filters, views])
+  }, [naming, focusLead, focusResultId, selectedResults, cursor, center, filters, views])
 
   const focusResult = focusResultId
     ? (state.rows.find((row) => row.providerPlaceId === focusResultId) ?? null)
@@ -503,12 +567,12 @@ export function MapConsole({
         thing to get right.
       */}
       <SaveBar
-        rows={state.rows}
+        // The drawn order, so a preset here and a range in the drawer below are
+        // both talking about the same list.
+        rows={resultRows}
         selected={selectedResults}
         onSelect={setSelectedResults}
         searchId={state.searchId}
-        // No tick boxes on a field of marks, so no shift-click run to advertise.
-        rangeHint={false}
         onSaved={(items) => {
           markSaved(items)
           // The saved leads are now in the book and belong on the map as amber.
@@ -520,7 +584,13 @@ export function MapConsole({
       />
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        <div className="relative flex min-h-[22rem] flex-1 flex-col">
+        {/*
+          The field and its drawer stack; the overlays are positioned against
+          the field alone, so the legend keeps sitting on the map rather than
+          over a table of rows.
+        */}
+        <div className="flex min-h-[22rem] flex-1 flex-col">
+          <div className="relative flex min-h-0 flex-1 flex-col">
           <LeadsMap
             points={points}
             results={state.rows}
@@ -574,6 +644,30 @@ export function MapConsole({
                   : 'No saved lead in this view. Zoom out, or search here to find some.'}
             </p>
           ) : null}
+          </div>
+
+          {/*
+            The feed as rows, under the field.
+
+            A map answers "where are they" and is a poor instrument for "take
+            these eleven": a dot carries no name, no rating and no website
+            column to sort on, and ticking thirty of them is thirty chances to
+            miss. One selection is shared between the two, so a mark clicked on
+            the field is a row ticked here and a run taken here lights up there.
+          */}
+          <ResultsDrawer
+            rows={resultRows}
+            selected={selectedResults}
+            selection={selection}
+            sort={sort}
+            onSort={setSort}
+            cursor={cursorIndex}
+            onCursor={setCursor}
+            running={state.status === 'running'}
+            cachedAt={state.cachedAt}
+            open={listOpen}
+            onOpen={setListOpen}
+          />
         </div>
 
         <MapPanel
