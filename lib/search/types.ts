@@ -38,6 +38,25 @@ export interface BudgetState {
 export interface SearchInput {
   query: string
   location?: string
+  /**
+   * The centre, already known — a point clicked on the map rather than text to
+   * be geocoded.
+   *
+   * When it is set the geocoding step is skipped entirely: `location` is text
+   * that has to be turned into a point, and this IS the point. That is one
+   * billable Google call fewer per search, which at a ceiling of zero is the
+   * difference between a search that runs and one that is refused.
+   *
+   * It does not start a second kind of search. Everything downstream — the
+   * replay cache, the spend guard, the provider, the stream — sees the same
+   * resolved centre it would have seen had the text been geocoded, and cannot
+   * tell which way it arrived.
+   *
+   * Needs a `radiusM` to mean anything: a point with no circle around it is not
+   * somewhere to search. The route refuses the pair rather than accepting a
+   * point it would then ignore.
+   */
+  center?: { lat: number; lng: number }
   radiusM?: number
   category?: string
   maxResults?: number

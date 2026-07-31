@@ -36,6 +36,16 @@ import type { SearchEvent, SearchInput } from '@/lib/search/types'
 /** Google's own ceiling for a single Text Search result set. */
 const DEFAULT_MAX_RESULTS = 60
 
+/**
+ * A clicked point, as something a person can read back.
+ *
+ * Five decimals is about a metre — past what a click can mean and short of the
+ * float noise that would make the same spot print differently twice.
+ */
+function formatPoint(center: { lat: number; lng: number }): string {
+  return `${center.lat.toFixed(5)}, ${center.lng.toFixed(5)}`
+}
+
 export async function* runSearch(
   input: SearchInput,
   /** Aborted when the operator navigates away — stops us paying for a page nobody will read. */
@@ -92,9 +102,23 @@ export async function* runSearch(
    * Resolve the location only when a radius makes it matter. Without one, the
    * location is folded into the text query and geocoding would be a call bought
    * for nothing.
+   *
+   * A centre handed in is already the answer that call would have bought, so the
+   * call is not made and the cache is not touched. Nothing below this block can
+   * tell the two apart: a resolved location is a resolved location, whether it
+   * came from Google or from the operator's finger on the map.
    */
   let resolved: ResolvedLocation | null = null
-  if (input.location?.trim() && input.radiusM && provider.resolveLocation) {
+  if (input.center) {
+    resolved = {
+      lat: input.center.lat,
+      lng: input.center.lng,
+      // A clicked point has no address, and inventing one — echoing back the
+      // text he typed, say — would put a name on this search that nothing
+      // resolved. Its own coordinates are the honest label for it.
+      formattedAddress: formatPoint(input.center),
+    }
+  } else if (input.location?.trim() && input.radiusM && provider.resolveLocation) {
     resolved = await readGeocodeCache(input.location)
     if (!resolved) {
       try {

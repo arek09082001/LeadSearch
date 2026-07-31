@@ -47,8 +47,29 @@ export function paramsHash(input: SearchInput, providerId: string): string {
     radiusM: input.radiusM ?? null,
     category: normalizeText(input.category) || null,
     maxResults: input.maxResults ?? null,
+    /*
+     * A clicked centre changes the answer, so it changes the fingerprint —
+     * otherwise the same words clicked in two towns would replay each other's
+     * results, which is the one failure a cache must never have.
+     *
+     * Present only when there is one, so every search asked before this existed
+     * still hashes to what it hashed to. Adding a `center: null` key would have
+     * invalidated the whole replay cache on deploy, and a cache emptied by a
+     * deploy is a week of searches bought a second time.
+     *
+     * Rounded to five decimals — a metre — because two clicks meant as the same
+     * spot are never the same float, and a fingerprint nothing can ever match
+     * twice is not a cache key.
+     */
+    ...(input.center
+      ? { center: [round5(input.center.lat), round5(input.center.lng)] }
+      : {}),
   })
   return createHash('sha256').update(canonical).digest('hex')
+}
+
+function round5(value: number): number {
+  return Math.round(value * 1e5) / 1e5
 }
 
 /* ------------------------------------------------------------------------- *
@@ -188,6 +209,10 @@ export async function createSearch(
       request_params: {
         query: input.query,
         location: input.location ?? null,
+        // What was asked, verbatim. `location_lat`/`location_lng` above hold the
+        // centre either way; this is the record of which way it got there — a
+        // point given, or text resolved.
+        center: input.center ?? null,
         radiusM: input.radiusM ?? null,
         category: input.category ?? null,
         maxResults: input.maxResults ?? null,
