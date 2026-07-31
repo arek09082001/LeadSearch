@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { IconExternal, IconPulse } from '@/components/icons'
 import { ChangeMarks } from '@/components/leads/change-marks'
 import { LeadActions } from '@/components/leads/lead-actions'
+import { LeadScreenshot } from '@/components/leads/lead-screenshot'
 import { LeadTimeline } from '@/components/leads/lead-timeline'
 import { ReAudit } from '@/components/leads/re-audit'
 import { RefreshLead } from '@/components/leads/refresh-lead'
@@ -453,6 +454,15 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
             two read as one thing, and neither is buried under the notebook.
           */}
           <ScoreBreakdown score={score} movement={movement} />
+
+          {/*
+            Directly under the score and above the notebook. The score answers
+            "is this worth a call"; this answers "what do I open with", and both
+            of those are read before the measurement list ever is. It renders
+            nothing when the audit has no screenshot, which is most audits — a
+            business with no website has no phone view to photograph.
+          */}
+          {audit ? <LeadScreenshot audit={audit} stale={auditIsStale} /> : null}
 
           {audit ? (
             <>
