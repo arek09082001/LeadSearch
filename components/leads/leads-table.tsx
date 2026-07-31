@@ -5,7 +5,9 @@ import Link from 'next/link'
 import { IconChevronDown, IconExternal, IconPulse } from '@/components/icons'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { Checkbox } from '@/components/ui/controls'
+import { cursorProps } from '@/components/ui/use-list-keys'
 import { FINDING_SPECS, sortCodes } from '@/lib/enrichment/vocabulary'
+import { shortDate, today } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
 import { type LeadRow, type LeadSort } from '@/lib/leads/types'
 
@@ -72,17 +74,12 @@ function hostname(url: string): string {
   }
 }
 
-function shortDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
-}
-
-/** `2026-08-14` from a date column, without a timezone shifting it a day. */
-function today(): string {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
+/*
+ * The cursor row, marked with the system's own focus treatment rather than a
+ * fill: selection and hover already spend `raise`, and a third tone of grey
+ * would be one distinction too many to make at speed.
+ */
+const CURSOR_RING = '[outline:1px_solid_var(--color-signal)] [outline-offset:-1px]'
 
 /** Beyond this the column stops being scannable and starts being a paragraph. */
 const MAX_MARKS = 4
@@ -203,6 +200,8 @@ export function LeadsTable({
   sort,
   desc,
   onSort,
+  cursor,
+  onCursor,
 }: {
   rows: LeadRow[]
   selected: Set<string>
@@ -210,6 +209,9 @@ export function LeadsTable({
   sort: LeadSort
   desc: boolean
   onSort: (key: LeadSort) => void
+  /** Row the keyboard is on. -1 when it is nowhere, which is where it starts. */
+  cursor: number
+  onCursor: (index: number) => void
 }) {
   const allSelected = rows.length > 0 && rows.every((row) => selected.has(row.id))
   const someSelected = !allSelected && rows.some((row) => selected.has(row.id))
@@ -269,17 +271,22 @@ export function LeadsTable({
         </thead>
 
         <tbody className="divide-y divide-rule">
-          {rows.map((lead) => {
+          {rows.map((lead, index) => {
             const ticked = selected.has(lead.id)
+            const cursored = index === cursor
             const due = lead.followUpAt !== null && lead.followUpAt <= now
             const deleted = lead.deletedAt !== null
 
             return (
               <tr
                 key={lead.id}
+                {...cursorProps(cursored)}
+                // Clicking anywhere in a row is also how the cursor is moved,
+                // so the mouse and the keyboard share one notion of "this one".
+                onPointerDown={() => onCursor(index)}
                 className={`group transition-colors ${
                   deleted ? 'text-ink-faint' : 'text-ink-dim'
-                } ${ticked ? 'bg-raise' : ''} hover:bg-raise`}
+                } ${ticked ? 'bg-raise' : ''} ${cursored ? `bg-raise ${CURSOR_RING}` : ''} hover:bg-raise`}
               >
                 <td
                   className={`py-1.5 pl-3 ${

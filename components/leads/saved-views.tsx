@@ -26,14 +26,22 @@ export function SavedViews({
   filters,
   onApply,
   onChanged,
+  naming,
+  onNaming,
 }: {
   views: SavedView[]
   filters: LeadFilters
   onApply: (filters: LeadFilters) => void
   /** Re-reads the views from the server after any edit. */
   onChanged: () => void
+  /*
+   * Naming is controlled from the console because `s` opens it. The keyboard
+   * lives at the console level — one listener for the whole surface rather than
+   * one per band — so the state it drives has to live there too.
+   */
+  naming: boolean
+  onNaming: (naming: boolean) => void
 }) {
-  const [naming, setNaming] = useState(false)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +75,7 @@ export function SavedViews({
     })
     if (ok) {
       setName('')
-      setNaming(false)
+      onNaming(false)
     }
   }
 
@@ -165,7 +173,7 @@ export function SavedViews({
                   event.preventDefault()
                   void create()
                 }
-                if (event.key === 'Escape') setNaming(false)
+                if (event.key === 'Escape') onNaming(false)
               }}
               placeholder="No website, Heilbronn"
               aria-label="Name for this view"
@@ -175,12 +183,12 @@ export function SavedViews({
               <IconCheck className="size-3.5" />
               Save
             </CommandButton>
-            <CommandButton type="button" variant="quiet" onClick={() => setNaming(false)}>
+            <CommandButton type="button" variant="quiet" onClick={() => onNaming(false)}>
               Cancel
             </CommandButton>
           </>
         ) : canSave ? (
-          <CommandButton type="button" onClick={() => setNaming(true)}>
+          <CommandButton type="button" keyHint="S" onClick={() => onNaming(true)}>
             <IconMark className="size-3.5" />
             Save this view
           </CommandButton>

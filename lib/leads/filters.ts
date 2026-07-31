@@ -1,5 +1,6 @@
 import {
   AUDIT_FILTERS,
+  COLD_SCORE_FLOOR,
   DEFAULT_FILTERS,
   FOLLOW_UP_FILTERS,
   LEAD_SORTS,
@@ -87,6 +88,43 @@ export function parseFilters(source: ParamSource): LeadFilters {
     desc: readOne(source, 'dir') === 'asc' ? false : naturalDesc(sort as LeadSort),
     page: Number.isFinite(page) && page > 1 ? Math.floor(page) : 1,
     deleted: readOne(source, 'bin') === '1',
+  }
+}
+
+/* ------------------------------------------------------------------------- *
+ * The outreach queues, as questions about the book
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The two queues are filter sets, not separate tables.
+ *
+ * Which means the Outreach surface can hand the operator a link straight into
+ * the library showing exactly the same rows, and a queue can never disagree
+ * with the book about who is in it. It also means neither queue needed a query
+ * of its own: they are `queryLeads` with the filters below.
+ */
+export function dueFilters(): LeadFilters {
+  // Most overdue first: the one that has been waiting longest is the one he is
+  // furthest behind on, and it is the top of the list for that reason alone.
+  return { ...DEFAULT_FILTERS, followUp: 'now', sort: 'follow_up', desc: false }
+}
+
+/**
+ * High scorers never touched.
+ *
+ * `followUp: 'none'` is what keeps the two queues from overlapping, and it is
+ * also the honest reading of cold: a lead he has already put a date on is
+ * scheduled, not neglected — it belongs in Due when that date arrives and
+ * nowhere until then.
+ */
+export function coldFilters(): LeadFilters {
+  return {
+    ...DEFAULT_FILTERS,
+    status: ['new'],
+    scoreMin: COLD_SCORE_FLOOR,
+    followUp: 'none',
+    sort: 'score',
+    desc: true,
   }
 }
 

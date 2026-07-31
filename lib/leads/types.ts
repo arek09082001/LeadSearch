@@ -28,6 +28,19 @@ export const LEAD_STATUSES = [
 
 export type LeadStatus = (typeof LEAD_STATUSES)[number]
 
+/** Mirrors public.activity_type — the outreach log's vocabulary. */
+export const ACTIVITY_TYPES = [
+  'call',
+  'email',
+  'message',
+  'visit',
+  'meeting',
+  'status_change',
+  'other',
+] as const
+
+export type ActivityType = (typeof ACTIVITY_TYPES)[number]
+
 /** Mirrors public.website_status. */
 export type WebsiteStatus = 'no_website' | 'unreachable' | 'reachable' | 'error'
 
@@ -67,6 +80,10 @@ export const AUDIT_FILTERS = [
 export type AuditFilter = FindingCode | typeof NEVER_AUDITED
 
 export const FOLLOW_UP_FILTERS = [
+  // Overdue and today as one question, because that is the one the Outreach
+  // queue asks: a follow-up that has arrived is due whether it arrived this
+  // morning or a fortnight ago.
+  { key: 'now', label: 'Due now' },
   { key: 'overdue', label: 'Overdue' },
   { key: 'today', label: 'Due today' },
   { key: 'week', label: 'Due this week' },
@@ -375,6 +392,33 @@ export interface AuditSummary {
   psiPerformance: number | null
 }
 
+/* ------------------------------------------------------------------------- *
+ * The history
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One line of what happened to this lead, from either of the two tables that
+ * record it.
+ *
+ * `lead_activities` and `lead_notes` are kept apart in the schema for good
+ * reasons — one is appended by a trigger, the other is prose the operator typed
+ * — but that split is the database's problem, not his. He worked this lead
+ * once, in one order, so it comes back as one sequence. The `kind` says which
+ * table a line came from; nothing above this type has to care.
+ */
+export interface TimelineEntry {
+  /** Namespaced across both tables: `note:<uuid>` or `activity:<bigint>`. */
+  id: string
+  kind: 'note' | 'activity'
+  /** The activity's type. Null on notes, which are not an activity type. */
+  type: ActivityType | null
+  at: string
+  /** The note's text, or an activity's summary. Null when it has neither. */
+  body: string | null
+  statusBefore: LeadStatus | null
+  statusAfter: LeadStatus | null
+}
+
 export interface LeadDetail {
   lead: LeadRow
   /** The newest audit, in full. Null when nothing has audited this lead yet. */
@@ -390,4 +434,30 @@ export interface LeadDetail {
    * breakdown inside says which.
    */
   score: StoredScore | null
+  /** Status changes and notes as one sequence, newest first. */
+  timeline: TimelineEntry[]
+}
+
+/* ------------------------------------------------------------------------- *
+ * The outreach queues
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What counts as a high scorer worth calling unprompted.
+ *
+ * PRODUCT.md left "cold" undecided; the operator has now decided it, and this
+ * is the number that decision reduces to. It is a floor rather than a ranking:
+ * everything above it is worth the call, and the queue orders by score inside
+ * that. 60 sits above the point where the scale stops describing real damage —
+ * `no_website` alone lands a well-reviewed business in the nineties, while a
+ * long tail of hygiene complaints on an unproven one does not reach here.
+ */
+export const COLD_SCORE_FLOOR = 60
+
+/** The two queues the Outreach surface is made of. */
+export interface OutreachQueues {
+  /** Follow-ups that have arrived, most overdue first. */
+  due: LeadListing
+  /** High scorers never worked and never scheduled, best first. */
+  cold: LeadListing
 }

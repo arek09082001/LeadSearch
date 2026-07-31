@@ -1,8 +1,11 @@
 import 'server-only'
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { today } from '@/lib/leads/dates'
+import { coldFilters, dueFilters } from '@/lib/leads/filters'
 import {
   PAGE_SIZE,
+  type ActivityType,
   type AuditFinding,
   type AuditSummary,
   type BulkAction,
@@ -15,10 +18,12 @@ import {
   type LeadListing,
   type LeadRow,
   type LeadStatus,
+  type OutreachQueues,
   type PsiState,
   type SaveRequest,
   type SaveResult,
   type SaveResultItem,
+  type TimelineEntry,
   type WebsiteStatus,
 } from '@/lib/leads/types'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
@@ -136,13 +141,6 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
   }
 }
 
-/** `2026-07-30`, in the operator's own day rather than UTC's. */
-function today(offsetDays = 0): string {
-  const now = new Date()
-  now.setDate(now.getDate() + offsetDays)
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-}
-
 const SORT_COLUMNS: Record<LeadFilters['sort'], string> = {
   score: 'current_score',
   saved: 'saved_at',
@@ -225,6 +223,11 @@ function applyFilters<T>(query: T, filters: LeadFilters): T {
   if (filters.audit.length) result = result.overlaps('audit_flags', filters.audit)
 
   switch (filters.followUp) {
+    // A date that has arrived, whether this morning or a fortnight ago. Null
+    // dates are excluded by the comparison itself, not by a second predicate.
+    case 'now':
+      result = result.lte('follow_up_at', today())
+      break
     case 'overdue':
       result = result.lt('follow_up_at', today())
       break
@@ -304,6 +307,22 @@ export async function queryLeadIds(filters: LeadFilters, limit = 5000): Promise<
 
   if (error) throw new Error(`Could not resolve the selection: ${error.message}`)
   return ((data ?? []) as { id: string }[]).map((row) => row.id)
+}
+
+/**
+ * The Outreach surface, in one read.
+ *
+ * Two questions against the same library rather than a queue table of their
+ * own. Nothing is materialised, so a lead leaves a queue the moment the
+ * operator acts on it — setting a status or a new date is the only thing that
+ * has to happen, and the next read simply does not find it.
+ */
+export async function readOutreach(): Promise<OutreachQueues> {
+  const [due, cold] = await Promise.all([
+    queryLeads(dueFilters()),
+    queryLeads(coldFilters()),
+  ])
+  return { due, cold }
 }
 
 async function readListNames(): Promise<Map<string, string>> {
@@ -824,6 +843,76 @@ export async function readLead(id: string): Promise<LeadRow | null> {
   return toRow(data as unknown as LibraryRecord, listNames)
 }
 
+/**
+ * Everything that has happened to this lead, as one sequence.
+ *
+ * Two tables, read separately and merged here rather than in SQL. A union view
+ * would have to widen both sides to a common column list and cast the enum to
+ * text to do it, and the result would still need sorting in one place — this
+ * way each table keeps its own shape and the merge is four lines that can be
+ * read.
+ *
+ * Both sides are limited before the merge, so a lead with three hundred notes
+ * cannot push its status history off the end of the page: the limit costs the
+ * oldest lines of each, which is what a limit on a history should cost.
+ */
+export async function readTimeline(leadId: string, limit = 200): Promise<TimelineEntry[]> {
+  const supabase = createServiceClient()
+
+  const [activities, notes] = await Promise.all([
+    supabase
+      .from('lead_activities')
+      .select('id, type, occurred_at, summary, status_before, status_after')
+      .eq('lead_id', leadId)
+      .order('occurred_at', { ascending: false })
+      .limit(limit),
+    supabase
+      .from('lead_notes')
+      .select('id, body, created_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(limit),
+  ])
+
+  const entries: TimelineEntry[] = [
+    ...((activities.data ?? []) as {
+      id: number
+      type: ActivityType
+      occurred_at: string
+      summary: string | null
+      status_before: LeadStatus | null
+      status_after: LeadStatus | null
+    }[]).map((row) => ({
+      id: `activity:${row.id}`,
+      kind: 'activity' as const,
+      type: row.type,
+      at: row.occurred_at,
+      body: row.summary,
+      statusBefore: row.status_before,
+      statusAfter: row.status_after,
+    })),
+    ...((notes.data ?? []) as { id: string; body: string; created_at: string }[]).map((row) => ({
+      id: `note:${row.id}`,
+      kind: 'note' as const,
+      type: null,
+      at: row.created_at,
+      body: row.body,
+      statusBefore: null,
+      statusAfter: null,
+    })),
+  ]
+
+  /*
+   * Newest first, and the id breaks the tie. A note saved alongside a status
+   * change lands in the same transaction and can share a timestamp to the
+   * microsecond; without a second key the two would swap places between reads
+   * and the history would look like it was rewriting itself.
+   */
+  return entries
+    .sort((a, b) => (a.at === b.at ? b.id.localeCompare(a.id) : a.at < b.at ? 1 : -1))
+    .slice(0, limit)
+}
+
 /*
  * One unbroken literal, for the same reason LIBRARY_COLUMNS is one.
  */
@@ -910,9 +999,13 @@ function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
 export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const supabase = createServiceClient()
 
-  // The score is read alongside rather than after: it hangs off the lead, not
-  // off the audit, and a lead with no audit at all can still carry one.
-  const [lead, score] = await Promise.all([readLead(id), readCurrentScore(id)])
+  // The score and the history are read alongside rather than after: neither
+  // hangs off the audit, and a lead with no audit at all can carry both.
+  const [lead, score, timeline] = await Promise.all([
+    readLead(id),
+    readCurrentScore(id),
+    readTimeline(id),
+  ])
   if (!lead) return null
 
   const { data: audits } = await supabase
@@ -925,7 +1018,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score }
+  if (!newest) return { lead, audit: null, history: [], score, timeline }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -964,7 +1057,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score }
+  return { lead, audit: toAudit(newest, findings), history, score, timeline }
 }
 
 export async function updateLead(
