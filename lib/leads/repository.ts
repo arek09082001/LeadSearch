@@ -1056,7 +1056,7 @@ export async function readTimeline(leadId: string, limit = 200): Promise<Timelin
  * One unbroken literal, for the same reason LIBRARY_COLUMNS is one.
  */
 const AUDIT_COLUMNS =
-  'id, audited_at, checker_version, website_url, final_url, website_status, http_status, duration_ms, error, dns_resolves, is_https, tls_valid, tls_expires_at, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, psi_error, psi_checked_at, failed_codes'
+  'id, audited_at, checker_version, website_url, final_url, website_status, http_status, duration_ms, error, dns_resolves, is_https, tls_valid, tls_expires_at, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, psi_error, psi_checked_at, screenshot_path, failed_codes'
 
 interface AuditRecord {
   id: string
@@ -1088,6 +1088,7 @@ interface AuditRecord {
   psi_cls: number | string | null
   psi_error: string | null
   psi_checked_at: string | null
+  screenshot_path: string | null
   failed_codes: string[] | null
 }
 
@@ -1122,6 +1123,7 @@ function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
     psiCls: record.psi_cls === null ? null : Number(record.psi_cls),
     psiError: record.psi_error,
     psiCheckedAt: record.psi_checked_at,
+    screenshotPath: record.screenshot_path,
     findings,
   }
 }

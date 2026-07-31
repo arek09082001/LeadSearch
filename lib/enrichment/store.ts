@@ -3,6 +3,7 @@ import 'server-only'
 import { CHECKER_VERSION, type Measurement } from '@/lib/enrichment/checker'
 import type { Finding } from '@/lib/enrichment/findings'
 import type { PageSpeed } from '@/lib/enrichment/pagespeed'
+import { discardScreenshots, storeScreenshot } from '@/lib/enrichment/screenshot'
 import { createServiceClient } from '@/lib/supabase/server'
 
 /*
@@ -191,6 +192,12 @@ export async function failLead(leadId: string, message: string): Promise<void> {
 
 export interface PerformanceJob {
   auditId: string
+  /**
+   * Carried alongside the audit because the screenshot prune is scoped to the
+   * lead, not to the audit: when a new frame lands, the frames belonging to that
+   * lead's EARLIER audits are the ones that stop being worth storing.
+   */
+  leadId: string
   url: string
   /** How many times PageSpeed has already been asked about this audit. */
   attempts: number
@@ -231,7 +238,7 @@ export async function claimPerformanceWork(limit: number): Promise<PerformanceJo
     .update({ psi_state: 'running', psi_checked_at: new Date().toISOString() })
     .in('id', ids)
     .eq('psi_state', 'pending')
-    .select('id, final_url, website_url, psi_attempts')
+    .select('id, lead_id, final_url, website_url, psi_attempts')
 
   if (error) {
     console.error('[enrichment] could not claim PageSpeed work', error.message)
@@ -240,12 +247,14 @@ export async function claimPerformanceWork(limit: number): Promise<PerformanceJo
 
   return ((data ?? []) as {
     id: string
+    lead_id: string
     final_url: string | null
     website_url: string | null
     psi_attempts: number | null
   }[])
     .map((row) => ({
       auditId: row.id,
+      leadId: row.lead_id,
       url: row.final_url ?? row.website_url ?? '',
       attempts: row.psi_attempts ?? 0,
     }))
@@ -317,15 +326,28 @@ export async function reclaimStalePerformance(staleMinutes: number): Promise<voi
  * alone. The audit is not finished; saying it scored nothing would be a
  * judgement, and the whole reason for the retry is that no judgement was reached.
  */
-export async function recordPerformance(
-  auditId: string,
-  psi: PageSpeed,
-  findings: Finding[],
-  attempts = MAX_PSI_ATTEMPTS,
-) {
+export async function recordPerformance(job: PerformanceJob, psi: PageSpeed, findings: Finding[]) {
   const supabase = createServiceClient()
+  const { auditId, attempts } = job
 
   const retrying = psi.retryable && attempts < MAX_PSI_ATTEMPTS
+
+  /*
+   * The screenshot is written BEFORE the row, and only when the run settled.
+   *
+   * Before, because the column is what makes the object findable: an object
+   * written after a successful update would be unreferenced for the width of the
+   * gap, and if the invocation died in that gap it would be unreferenced for
+   * ever. This ordering can only leave the opposite kind of orphan — bytes in
+   * the bucket that no row points at — which the prune below and the next audit
+   * both clean up.
+   *
+   * Only when it settled, because the retry path deliberately writes nothing:
+   * `psi.screenshot` is null on every failure anyway, and uploading on a run we
+   * are about to ask again would spend the write twice.
+   */
+  const screenshotPath =
+    !retrying && psi.screenshot ? await storeScreenshot(auditId, psi.screenshot) : null
 
   const patch: Record<string, unknown> = retrying
     ? {
@@ -347,12 +369,81 @@ export async function recordPerformance(
             ? `${psi.error} Gave up after ${attempts + 1} attempts.`
             : psi.error,
         psi_checked_at: psi.fetchedAt,
+        screenshot_path: screenshotPath,
       }
 
   const { error } = await supabase.from('lead_audits').update(patch).eq('id', auditId)
-  if (error) throw new Error(error.message)
+  if (error) {
+    /*
+     * The bytes are in the bucket and the row that would have named them is not.
+     * Drop them rather than leave an object nothing will ever point at or find:
+     * the audit is going to be retried or re-run, and the frame it takes then is
+     * the one that will be referenced.
+     */
+    if (screenshotPath) await discardScreenshots([screenshotPath]).catch(() => {})
+    throw new Error(error.message)
+  }
+
+  if (screenshotPath) await pruneScreenshots(job.leadId, auditId)
 
   if (!retrying) await writeFindings(auditId, findings)
+}
+
+/**
+ * Keep one screenshot per lead — this one.
+ *
+ * Storage grows with the size of the book rather than with how often it has been
+ * audited, which at a monthly ceiling of zero is the difference between fitting
+ * in the free tier and not: the operator re-audits, and a year of monthly
+ * re-audits without this would store twelve pictures of every website he has
+ * ever looked at to show one.
+ *
+ * Nothing is lost that anybody could see. The lead page renders the newest
+ * audit's screenshot; earlier audits appear in the history as one line each, and
+ * a line does not carry a picture.
+ *
+ * Best-effort throughout, and ordered so it cannot destroy evidence it has not
+ * already disowned: the column is cleared FIRST, so a failure to delete leaves
+ * unreferenced bytes rather than a row pointing at an object that is gone.
+ */
+async function pruneScreenshots(leadId: string, keepAuditId: string): Promise<void> {
+  try {
+    const supabase = createServiceClient()
+
+    /*
+     * Read the keys BEFORE clearing them, and not from the UPDATE's own
+     * RETURNING: PostgREST returns the row as it now stands, so selecting
+     * `screenshot_path` back off the update that nulls it yields a column of
+     * nulls and deletes nothing. Two statements, in this order, is the only
+     * shape that both clears the reference first and still knows what it freed.
+     */
+    const { data: doomed } = await supabase
+      .from('lead_audits')
+      .select('id, screenshot_path')
+      .eq('lead_id', leadId)
+      .neq('id', keepAuditId)
+      .not('screenshot_path', 'is', null)
+
+    const rows = (doomed ?? []) as { id: string; screenshot_path: string | null }[]
+    const paths = rows
+      .map((row) => row.screenshot_path)
+      .filter((path): path is string => Boolean(path))
+    if (!paths.length) return
+
+    await supabase
+      .from('lead_audits')
+      .update({ screenshot_path: null })
+      .in(
+        'id',
+        rows.map((row) => row.id),
+      )
+
+    await discardScreenshots(paths)
+  } catch (error) {
+    // A screenshot that outlives its usefulness costs kilobytes. Failing the
+    // PageSpeed result over it would cost the scores.
+    console.error('[enrichment] could not prune screenshots', { leadId, error })
+  }
 }
 
 /** How many PageSpeed jobs are still outstanding. Feeds the "auditing N" note. */
