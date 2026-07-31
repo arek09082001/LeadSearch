@@ -3,7 +3,7 @@ import { after } from 'next/server'
 import { errorResponse, readJson, requireSession } from '@/lib/api/guard'
 import { runEnrichment } from '@/lib/enrichment/run'
 import { parseFilters } from '@/lib/leads/filters'
-import { applyBulk, queryLeadIds } from '@/lib/leads/repository'
+import { applyBulk, queryLeadIds, SELECT_ALL_LIMIT } from '@/lib/leads/repository'
 import { LEAD_STATUSES, type BulkAction, type LeadStatus } from '@/lib/leads/types'
 
 /*
@@ -85,12 +85,15 @@ export async function POST(request: Request) {
     let ids: string[] = Array.isArray(body.ids)
       ? body.ids.filter((id): id is string => typeof id === 'string')
       : []
+    let truncated = false
 
     // "Select all filtered" sends the filters instead of ten thousand ids. The
     // set is resolved here, against the same query the page was drawn from, so
     // the action touches exactly what the operator was looking at.
     if (!ids.length && typeof body.filters === 'string') {
-      ids = await queryLeadIds(parseFilters(new URLSearchParams(body.filters)))
+      const resolved = await queryLeadIds(parseFilters(new URLSearchParams(body.filters)))
+      ids = resolved.ids
+      truncated = resolved.truncated
     }
 
     if (!ids.length) {
@@ -118,6 +121,23 @@ export async function POST(request: Request) {
     // after the operator already has his answer.
     if (action.action === 're_audit' && result.affected) {
       after(() => runEnrichment(ids))
+    }
+
+    /*
+     * A cap that bit is said, in the receipt, in the same sentence as the count.
+     *
+     * "Select all matching" on a six-thousand-row filter resolves five thousand
+     * ids. Reporting "5,000 leads deleted" and nothing else lets the operator
+     * believe the filter is now empty when a thousand rows are still in it —
+     * and on a delete, that is the difference between a completed action and one
+     * he has to be told to repeat.
+     */
+    if (truncated) {
+      return Response.json({
+        ...result,
+        truncated: true,
+        message: `${result.message} That is the first ${SELECT_ALL_LIMIT.toLocaleString('de-DE')} matching the filter — there are more. Run it again to continue.`,
+      })
     }
 
     return Response.json(result)

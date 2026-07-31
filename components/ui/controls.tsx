@@ -124,6 +124,7 @@ export function Menu({
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!open) return
@@ -131,7 +132,18 @@ export function Menu({
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key !== 'Escape') return
+      /*
+       * Escape puts the caret back on the control that opened the panel.
+       *
+       * Without this, dismissing a filter menu from the keyboard drops focus to
+       * the document and the next Tab starts from the top of the page — which
+       * on this surface means tabbing back through the whole filter bar to
+       * reach the next menu. In a product whose brief is keyboard-first, a
+       * dismiss that costs the operator his place is worse than no shortcut.
+       */
+      setOpen(false)
+      triggerRef.current?.focus()
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -150,11 +162,19 @@ export function Menu({
 
   return (
     <div ref={rootRef} className="relative">
+      {/*
+        A disclosure, announced as one. `aria-haspopup` was claiming a menu, and
+        what opens is not one: these panels hold checkboxes, number fields and
+        text inputs, and a screen reader told to expect menu semantics will
+        promise arrow-key navigation that does not exist. `aria-expanded` on a
+        button with the panel next to it is the honest description and the one
+        that matches what the panel actually is.
+      */}
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         aria-expanded={open}
-        aria-haspopup="true"
         onClick={() => setOpen((prev) => !prev)}
         className={
           `label inline-flex items-center gap-1.5 border px-2 py-1.5 transition-colors ${trigger} ` +

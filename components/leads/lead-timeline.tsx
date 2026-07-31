@@ -71,12 +71,21 @@ function Line({ entry }: { entry: TimelineEntry }) {
             <span className="label text-ink-dim">
               {ACTIVITY_LABEL[entry.type ?? 'other'] ?? entry.type}
             </span>
-            {entry.body ? <span className="text-sm text-ink-dim">{entry.body}</span> : null}
+            {entry.body ? (
+              <span className="min-w-0 text-sm wrap-anywhere text-ink-dim">{entry.body}</span>
+            ) : null}
           </span>
         ) : (
-          // His own words, kept as typed: a note with line breaks in it was
-          // written with line breaks in it.
-          <p className="max-w-[70ch] text-sm whitespace-pre-wrap text-ink">{entry.body}</p>
+          /*
+            His own words, kept as typed: a note with line breaks in it was
+            written with line breaks in it. `wrap-anywhere` because a measured
+            column is only measured until somebody pastes a URL — an
+            unbreakable 300-character string would otherwise widen this column
+            and every timestamp beside it.
+          */
+          <p className="max-w-[70ch] text-sm whitespace-pre-wrap wrap-anywhere text-ink">
+            {entry.body}
+          </p>
         )}
       </div>
     </li>

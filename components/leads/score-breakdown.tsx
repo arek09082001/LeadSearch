@@ -106,14 +106,24 @@ function Step({ label, value, strong }: { label: string; value: string; strong?:
  */
 function Movement({ movement }: { movement: ScoreMovement }) {
   const { delta } = movement
-  const direction = delta === null ? 'changed' : delta < 0 ? 'Down' : delta > 0 ? 'Up' : 'Level'
+
+  /*
+   * A score can move its reasoning without moving its number — one fault
+   * swapped for another worth the same. "Level 0" is not a sentence anybody
+   * writes; the interesting part is the two lines underneath, and this line
+   * should get out of their way rather than put a zero in front of them.
+   */
+  const heading =
+    delta === null
+      ? 'Score withheld'
+      : delta === 0
+        ? 'Same score, different faults'
+        : `${delta < 0 ? 'Down' : 'Up'} ${Math.abs(delta)}`
 
   return (
     <div className="border-b border-rule px-3 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="label text-ink-dim">
-          {delta === null ? 'Score withheld' : `${direction} ${Math.abs(delta)}`}
-        </span>
+        <span className="label text-ink-dim">{heading}</span>
         <span className="font-data text-micro text-ink-faint">
           {movement.from ?? '—'} → {movement.to ?? '—'} · {shortDate(movement.when)}
         </span>

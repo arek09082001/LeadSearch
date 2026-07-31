@@ -8,7 +8,7 @@ import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
 import { FOLLOW_UP_PRESETS, datePlus, dueLabel, shortDate } from '@/lib/leads/dates'
 import { patchLead, type LeadPatch } from '@/lib/leads/patch'
-import { LEAD_STATUSES, type LeadRow, type LeadStatus } from '@/lib/leads/types'
+import { LEAD_STATUSES, LIMITS, type LeadRow, type LeadStatus } from '@/lib/leads/types'
 
 /*
  * Working the lead: where it stands, when to come back, and what happened.
@@ -197,6 +197,9 @@ export function LeadActions({ lead }: { lead: LeadRow }) {
             rows={2}
             value={note}
             disabled={busy}
+            // The route refuses past this. A field that accepts four thousand
+            // characters and loses them on save is worse than one that stops.
+            maxLength={LIMITS.note}
             placeholder="What happened. Saved with the status above, as one entry."
             aria-label="Note"
             onChange={(event) => setNote(event.target.value)}
@@ -242,9 +245,9 @@ export function LeadActions({ lead }: { lead: LeadRow }) {
       ) : null}
 
       {error ? (
-        <p className="flex items-start gap-2 border-t border-rule px-3 py-2">
+        <p role="alert" className="flex items-start gap-2 border-t border-rule px-3 py-2">
           <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
-          <span className="text-sm text-ink-dim">{error}</span>
+          <span className="min-w-0 text-sm wrap-anywhere text-ink-dim">{error}</span>
         </p>
       ) : null}
     </div>

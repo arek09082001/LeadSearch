@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { IconAlert, IconBook, IconCheck, IconClose, IconPlus } from '@/components/icons'
 import { CommandButton, CommandLink } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
-import type { SaveResult, SaveResultItem } from '@/lib/leads/types'
+import { LIMITS, type SaveResult, type SaveResultItem } from '@/lib/leads/types'
 import type { SearchRow } from '@/lib/search/types'
 
 /*
@@ -237,6 +237,7 @@ export function SaveBar({
                   <input
                     type="text"
                     value={newListName}
+                    maxLength={LIMITS.name}
                     onChange={(event) => {
                       setNewListName(event.target.value)
                       // Typing a new name is a choice against the picked list.
@@ -259,6 +260,7 @@ export function SaveBar({
           <input
             type="text"
             value={note}
+            maxLength={LIMITS.note}
             onChange={(event) => setNote(event.target.value)}
             placeholder="Note on all of them (optional)"
             aria-label="Note applied to every lead in this selection"

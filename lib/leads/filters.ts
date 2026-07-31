@@ -6,6 +6,7 @@ import {
   FOLLOW_UP_FILTERS,
   LEAD_SORTS,
   LEAD_STATUSES,
+  LIMITS,
   type AuditFilter,
   type ChangeFilter,
   type FollowUpFilter,
@@ -89,7 +90,13 @@ export function parseFilters(source: ParamSource): LeadFilters {
     // Absent means the sort's own natural direction, which for score is high
     // first. Only an explicit `dir=asc` flips it.
     desc: readOne(source, 'dir') === 'asc' ? false : naturalDesc(sort as LeadSort),
-    page: Number.isFinite(page) && page > 1 ? Math.floor(page) : 1,
+    /*
+     * Clamped at both ends. A hand-edited `?page=99999999` would otherwise
+     * become a PostgREST range starting ten billion rows in, which answers with
+     * an error rather than an empty page — a 500 on a URL the operator typed.
+     */
+    page:
+      Number.isFinite(page) && page > 1 ? Math.min(Math.floor(page), LIMITS.page) : 1,
     deleted: readOne(source, 'bin') === '1',
   }
 }

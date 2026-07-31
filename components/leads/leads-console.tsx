@@ -366,16 +366,28 @@ export function LeadsConsole({
         </div>
       ) : null}
 
+      {/*
+        A receipt for something that has already happened, so it is polite: it
+        waits for a gap rather than interrupting. The band appears and vanishes
+        on a timer, and the operator's eye is on the table when it does.
+      */}
       {notice && !undo ? (
-        <div className="border-b border-rule bg-panel px-3 py-1.5">
+        <div role="status" className="border-b border-rule bg-panel px-3 py-1.5">
           <span className="text-sm text-ink-dim">{notice}</span>
         </div>
       ) : null}
 
+      {/*
+        `alert`, not `status`: an action he asked for did not happen, and unlike
+        the notice above this one does not clear itself.
+      */}
       {error ? (
-        <div className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2">
+        <div
+          role="alert"
+          className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2"
+        >
           <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
-          <p className="text-sm text-ink-dim">{error}</p>
+          <p className="text-sm wrap-anywhere text-ink-dim">{error}</p>
         </div>
       ) : null}
 

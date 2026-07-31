@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { IconClose, IconRefresh, IconStrike, IconSync, IconUndo } from '@/components/icons'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
-import { LEAD_STATUSES, type BulkAction, type LeadStatus } from '@/lib/leads/types'
+import { LEAD_STATUSES, LIMITS, type BulkAction, type LeadStatus } from '@/lib/leads/types'
 
 /*
  * What a selection can be turned into.
@@ -122,6 +122,7 @@ export function BulkBar({
                   <input
                     type="text"
                     value={newListName}
+                    maxLength={LIMITS.name}
                     onChange={(event) => setNewListName(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' || !newListName.trim()) return

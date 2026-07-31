@@ -26,11 +26,9 @@ export function ExportCsv({
   query,
   /** How many rows the file will hold. Stated, because an export of nothing is a surprise. */
   count,
-  label = 'CSV',
 }: {
   query: string
   count: number
-  label?: string
 }) {
   const href = (sep: string) => `/api/leads/export?${[query, `sep=${sep}`].filter(Boolean).join('&')}`
 
@@ -39,7 +37,7 @@ export function ExportCsv({
       label={
         <span className="flex items-center gap-1.5">
           <IconDownload className="size-3.5" />
-          {label}
+          CSV
         </span>
       }
       align="right"

@@ -18,6 +18,7 @@ import { patchLead, type LeadPatch } from '@/lib/leads/patch'
 import {
   COLD_SCORE_FLOOR,
   LEAD_STATUSES,
+  LIMITS,
   type LeadRow,
   type LeadStatus,
   type OutreachQueues,
@@ -231,15 +232,18 @@ export function OutreachConsole({ due, cold }: OutreachQueues) {
       </div>
 
       {notice ? (
-        <div className="border-b border-rule bg-panel px-3 py-1.5">
+        <div role="status" className="border-b border-rule bg-panel px-3 py-1.5">
           <span className="text-sm text-ink-dim">{notice}</span>
         </div>
       ) : null}
 
       {error ? (
-        <div className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2">
+        <div
+          role="alert"
+          className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2"
+        >
           <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
-          <p className="text-sm text-ink-dim">{error}</p>
+          <p className="text-sm wrap-anywhere text-ink-dim">{error}</p>
         </div>
       ) : null}
 
@@ -268,11 +272,7 @@ export function OutreachConsole({ due, cold }: OutreachQueues) {
                   the whole queue, including the rows the one-page cap below is
                   hiding.
                 */}
-                <ExportCsv
-                  query={`queue=${section.key}`}
-                  count={section.listing.total}
-                  label={`${section.title} CSV`}
-                />
+                <ExportCsv query={`queue=${section.key}`} count={section.listing.total} />
               </span>
             </div>
 
@@ -483,6 +483,7 @@ function QueueRow({
               type="text"
               value={edit?.note ?? ''}
               disabled={busy}
+              maxLength={LIMITS.note}
               placeholder="Note — saved with the above, as one entry"
               aria-label={`Note on ${lead.name}`}
               onChange={(event) => onStage({ note: event.target.value })}

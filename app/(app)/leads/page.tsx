@@ -40,13 +40,25 @@ export default async function LeadsPage({
   ])
 
   return (
-    <LeadsConsole
-      filters={filters}
-      listing={listing}
-      facets={facets}
-      views={views}
-      lists={lists}
-      pendingAudits={pendingAudits}
-    />
+    <>
+      {/*
+        The surface's name, for anything reading the document rather than
+        looking at it. There is no visible page title by design — the masthead
+        marks the active surface with a rule and the status strip says what the
+        data is, which is what a dealing screen does with the space a title
+        would take. That is a visual decision, not a structural one, so the
+        heading exists; it is just not drawn.
+      */}
+      <h1 className="sr-only">Leads — the permanent library</h1>
+
+      <LeadsConsole
+        filters={filters}
+        listing={listing}
+        facets={facets}
+        views={views}
+        lists={lists}
+        pendingAudits={pendingAudits}
+      />
+    </>
   )
 }

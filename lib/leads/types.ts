@@ -168,6 +168,24 @@ export const DEFAULT_FILTERS: LeadFilters = {
 
 export const PAGE_SIZE = 100
 
+/**
+ * The library's own limits, in one place both halves may read.
+ *
+ * Every one of these is enforced on the server, because a client-side cap is a
+ * courtesy and not a constraint. They are stated here so the field that takes
+ * the input can carry the same number the route rejects at — a textarea that
+ * lets him type four thousand characters and then throws them away on save is
+ * worse than one that stops him at two.
+ */
+export const LIMITS = {
+  /** A note. Long enough for what happened on a call, short enough to read back. */
+  note: 2000,
+  /** A list name, and a saved view's. Both are read in a one-line bar. */
+  name: 60,
+  /** The furthest page the pager will address. Past the end of any real book. */
+  page: 10_000,
+} as const
+
 /** One row of the library, flattened for the table. */
 export interface LeadRow {
   id: string

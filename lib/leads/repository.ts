@@ -6,6 +6,7 @@ import { today } from '@/lib/leads/dates'
 import { coldFilters, dueFilters } from '@/lib/leads/filters'
 import { describeDelta, type Snapshot } from '@/lib/refresh/diff'
 import {
+  LIMITS,
   PAGE_SIZE,
   type ActivityType,
   type AuditFinding,
@@ -371,19 +372,30 @@ export async function* leadPages(
  * because the only thing done with them is a bulk action, and shipping 4000
  * full rows to the browser to check 4000 boxes would be absurd.
  */
-export async function queryLeadIds(filters: LeadFilters, limit = 5000): Promise<string[]> {
+export const SELECT_ALL_LIMIT = 5000
+
+export async function queryLeadIds(
+  filters: LeadFilters,
+  limit = SELECT_ALL_LIMIT,
+): Promise<{ ids: string[]; truncated: boolean }> {
   const supabase = createServiceClient()
 
   // One query selecting one column, not the paged listing. Reading four
   // thousand full rows — audits, list arrays, note counts — to throw away
   // everything but the id would be forty round trips for a delete.
+  //
+  // One row past the limit is asked for, purely to find out whether there was
+  // one. A cap on a set that a DELETE is about to be applied to has to be
+  // detectable, not just applied.
   const { data, error } = await applyFilters(
     supabase.from('leads_library').select('id'),
     filters,
-  ).range(0, limit - 1)
+  ).range(0, limit)
 
   if (error) throw new Error(`Could not resolve the selection: ${error.message}`)
-  return ((data ?? []) as { id: string }[]).map((row) => row.id)
+
+  const rows = ((data ?? []) as { id: string }[]).map((row) => row.id)
+  return { ids: rows.slice(0, limit), truncated: rows.length > limit }
 }
 
 /**
@@ -427,58 +439,48 @@ async function countLibrary(): Promise<number> {
 export async function readFacets(): Promise<LeadFacets> {
   const supabase = createServiceClient()
 
-  const [places, listRows, memberships, deleted] = await Promise.all([
-    supabase
-      .from('leads')
-      .select('id, city, primary_type, status')
-      .is('deleted_at', null)
-      .limit(20000),
-    supabase.from('lists').select('id, name').order('name'),
-    supabase.from('lead_lists').select('list_id, lead_id').limit(20000),
+  /*
+   * Four reads, each returning about as many rows as the menu will draw.
+   *
+   * This used to fetch the whole library and group it here — twenty thousand
+   * lead rows and twenty thousand list memberships, over the wire, on every
+   * filter change, to render thirty menu entries. Every filter change in this
+   * surface is a navigation, so that was the cost of a click on the page the
+   * operator lives on, and past the fetch limit the counts quietly stopped
+   * being true with nothing saying so.
+   *
+   * The GROUP BY belongs where the rows are. See the facets migration.
+   */
+  const [values, statusRows, listRows, deleted] = await Promise.all([
+    supabase.from('lead_facet_values').select('kind, value, count'),
+    supabase.from('lead_status_counts').select('status, count'),
+    supabase.from('lead_list_counts').select('id, name, count').order('name'),
     supabase
       .from('leads')
       .select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null),
   ])
 
-  const cities = new Map<string, number>()
-  const categories = new Map<string, number>()
-  const statuses = new Map<LeadStatus, number>()
-  const live = new Set<string>()
-
-  for (const place of (places.data ?? []) as {
-    id: string
-    city: string | null
-    primary_type: string | null
-    status: LeadStatus
-  }[]) {
-    live.add(place.id)
-    if (place.city) cities.set(place.city, (cities.get(place.city) ?? 0) + 1)
-    if (place.primary_type) {
-      categories.set(place.primary_type, (categories.get(place.primary_type) ?? 0) + 1)
-    }
-    statuses.set(place.status, (statuses.get(place.status) ?? 0) + 1)
-  }
-
-  // Counted against the live set rather than through an embedded join: a list
-  // holding forty deleted leads must not advertise forty.
-  const listCounts = new Map<string, number>()
-  for (const row of (memberships.data ?? []) as { list_id: string; lead_id: string }[]) {
-    if (!live.has(row.lead_id)) continue
-    listCounts.set(row.list_id, (listCounts.get(row.list_id) ?? 0) + 1)
-  }
-
   const byCount = <T extends { count: number }>(a: T, b: T) => b.count - a.count
 
+  // `count(*)` is bigint, and PostgREST sends bigint as a string to avoid
+  // losing precision in JSON. Every count below is therefore coerced.
+  const rows = (values.data ?? []) as { kind: string; value: string; count: number | string }[]
+  const of = (kind: string) =>
+    rows
+      .filter((row) => row.kind === kind)
+      .map((row) => ({ value: row.value, count: Number(row.count) }))
+      .sort(byCount)
+
   return {
-    cities: [...cities].map(([value, count]) => ({ value, count })).sort(byCount),
-    categories: [...categories].map(([value, count]) => ({ value, count })).sort(byCount),
-    lists: ((listRows.data ?? []) as { id: string; name: string }[]).map((list) => ({
-      id: list.id,
-      name: list.name,
-      count: listCounts.get(list.id) ?? 0,
-    })),
-    statuses: [...statuses].map(([value, count]) => ({ value, count })).sort(byCount),
+    cities: of('city'),
+    categories: of('category'),
+    lists: ((listRows.data ?? []) as { id: string; name: string; count: number | string }[]).map(
+      (list) => ({ id: list.id, name: list.name, count: Number(list.count) }),
+    ),
+    statuses: ((statusRows.data ?? []) as { status: LeadStatus; count: number | string }[])
+      .map((row) => ({ value: row.status, count: Number(row.count) }))
+      .sort(byCount),
     deletedCount: deleted.count ?? 0,
   }
 }
@@ -503,6 +505,13 @@ export async function readLists(): Promise<{ id: string; name: string }[]> {
 export async function ensureList(name: string): Promise<{ id: string; name: string }> {
   const trimmed = name.trim()
   if (!trimmed) throw new Error('A list needs a name.')
+  // Same ceiling a saved view's name has, and for the same reason: both are
+  // read in a one-line bar, and the column is `text` so nothing else stops a
+  // paste. Refused rather than silently truncated — a list he cannot find again
+  // under the name he gave it is worse than an error he can act on.
+  if (trimmed.length > LIMITS.name) {
+    throw new Error(`That list name is too long (max ${LIMITS.name} characters).`)
+  }
 
   const supabase = createServiceClient()
   const { data: existing } = await supabase
@@ -1210,6 +1219,12 @@ export async function updateLead(
 export async function addNote(leadId: string, body: string): Promise<void> {
   const trimmed = body.trim()
   if (!trimmed) throw new Error('A note needs something in it.')
+  // The column is `text`, so this is the only thing between a stray paste and a
+  // history entry nobody can read past. The save route caps at the same number;
+  // the constant is shared so the two cannot drift.
+  if (trimmed.length > LIMITS.note) {
+    throw new Error(`That note is too long (max ${LIMITS.note} characters).`)
+  }
 
   const supabase = createServiceClient()
   const { error } = await supabase.from('lead_notes').insert({ lead_id: leadId, body: trimmed })

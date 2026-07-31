@@ -235,9 +235,19 @@ function Changed({ lead }: { lead: LeadDetail['lead'] }) {
   if (!codes.length) return null
 
   return (
+    /*
+      A `live` rule, not the amber one.
+
+      DESIGN.md gives each signal colour exactly one meaning, and amber is the
+      operator's own decisions and his book — which is what the actions band
+      directly below this one carries. What this band holds is the opposite: it
+      is Google's, transient, and arrived without him. `live` is the token for
+      exactly that, and using it here also stops three amber-ruled bands from
+      stacking down the top of the page with nothing separating them.
+    */
     <section
       aria-label="What has changed"
-      className="border-b border-rule border-l border-l-signal bg-panel px-3 py-2"
+      className="border-b border-rule border-l border-l-live bg-panel px-3 py-2"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="label text-ink-dim">

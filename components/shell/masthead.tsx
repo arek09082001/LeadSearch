@@ -27,9 +27,16 @@ export function Masthead({ email }: { email: string }) {
             {email}
           </span>
           <form action={signOutAction}>
+            {/*
+              The glyph stays 14px; the target does not. PRODUCT.md says he
+              checks a lead from a phone between sessions, and a 22px hit area
+              for the one control that ends the session is a mis-tap waiting to
+              happen. Padding rather than a bigger icon, so the rule above looks
+              exactly as it did.
+            */}
             <button
               type="submit"
-              className="flex items-center gap-1.5 px-1 py-1 text-ink-faint transition-colors duration-150 hover:text-alert"
+              className="-m-2 flex min-h-11 min-w-11 items-center justify-center p-2 text-ink-faint transition-colors duration-150 hover:text-alert md:min-h-0 md:min-w-0"
             >
               <IconExit className="size-3.5" />
               <span className="sr-only">Sign out</span>
