@@ -118,8 +118,18 @@ closed.
 
 ## Migrations
 
-Everything the product needs is in `supabase/migrations/`, in filename order. Apply them
-with the Supabase CLI:
+Everything the product needs is in `supabase/migrations/`, in filename order.
+
+**The quickest way — one file, no tooling.** `supabase/schema.sql` is every migration
+concatenated in order. Open the Supabase dashboard → SQL Editor → New query, paste the whole
+file, Run. It takes a few seconds.
+
+Enable **pg_cron** first (Database → Extensions), or the four scheduled jobs below never get
+created. The file asks for the extension itself and asserts at the end that the jobs exist,
+so a missing pg_cron surfaces as an error rather than as a year of data that quietly failed
+to expire.
+
+**Or with the CLI**, which is what you want once the schema starts moving:
 
 ```bash
 npm i -g supabase                      # once
@@ -127,10 +137,17 @@ supabase link --project-ref <your-ref>
 supabase db push
 ```
 
-Or paste each file, in order, into the SQL editor in the Supabase dashboard.
+The migrations are the source of truth; `schema.sql` is generated from them and must be
+regenerated when one changes. Both assume an **empty** database — running either twice fails
+on the first `create table`, which is intended: they build a schema, they do not reconcile
+one. Order matters, because later files drop and rebuild the `leads_library` view on the
+widened tables underneath it.
 
-They are ordinary forward migrations and assume an empty database. Order matters — later
-files drop and rebuild the `leads_library` view on the widened tables underneath it.
+Afterwards, confirm the schema landed:
+
+```sql
+select * from public.scheduled_jobs;   -- expect three rows
+```
 
 ### The scheduled jobs
 
@@ -155,6 +172,30 @@ Check them at any time:
 ```sql
 select * from public.scheduled_jobs;
 ```
+
+## Who can reach the database
+
+Nobody but the server, and that is the whole authorization model. Sessions belong to
+NextAuth, so there is no Supabase JWT and no `auth.uid()` for a policy to inspect — an
+`auth.uid()`-based policy here would match nothing and create the illusion of protection.
+
+Three layers, applied by `20260730180300_lockdown.sql`:
+
+1. **RLS enabled on every table, with no policies.** Zero rows visible to `anon` or
+   `authenticated`.
+2. **Table privileges revoked** from both roles, so a policy appearing later changes nothing.
+3. **Schema `USAGE` revoked** — from `PUBLIC` as well as from the two roles by name. The
+   second half is the load-bearing one: Postgres grants `USAGE` on `public` to the `PUBLIC`
+   pseudo-role by default and every role inherits it, so revoking from `anon` alone leaves
+   `has_schema_privilege('anon', 'public', 'USAGE')` answering true and the layer inert.
+   `postgres` and `service_role` are granted explicitly first so the revoke cannot lock out
+   the server.
+
+The result is that a leaked publishable key fails at the schema, before it can name a table.
+`service_role` — which is what the secret key resolves to — is untouched.
+
+Supabase's security advisor will report "RLS enabled, no policy" on every table. Here that
+notice is the desired state, not a finding to fix.
 
 The fourth is a Vercel cron, declared in `vercel.json`, because it has to call Google and
 the database cannot. Running elsewhere, point any scheduler at
