@@ -68,6 +68,9 @@ interface LibraryRecord {
   primary_type: string | null
   google_maps_uri: string | null
   fetched_at: string
+  imprint_email: string | null
+  imprint_phone: string | null
+  imprint_fetched_at: string | null
   status: LeadStatus
   follow_up_at: string | null
   saved_at: string
@@ -108,7 +111,7 @@ interface LibraryRecord {
  * splitting it across lines to be tidy collapses that inference to `string`.
  */
 const LIBRARY_COLUMNS =
-  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, change_flags, changed_at, refresh_error, list_ids, note_count'
+  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, imprint_email, imprint_phone, imprint_fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, change_flags, changed_at, refresh_error, list_ids, note_count'
 
 function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
   return {
@@ -125,6 +128,9 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
     userRatingCount: record.user_rating_count,
     mapsUri: record.google_maps_uri,
     fetchedAt: record.fetched_at,
+    imprintEmail: record.imprint_email,
+    imprintPhone: record.imprint_phone,
+    imprintFetchedAt: record.imprint_fetched_at,
     status: record.status,
     score: record.current_score,
     followUpAt: record.follow_up_at,
@@ -251,6 +257,13 @@ function applyFilters<T>(query: T, filters: LeadFilters): T {
    * at once is not.
    */
   if (filters.change.length) result = result.overlaps('change_flags', filters.change)
+
+  /*
+   * The writable list. Not an audit filter — an email address is a fact about
+   * the business rather than a fault on its site — and it is the one question
+   * asked before a session of writing rather than calling.
+   */
+  if (filters.hasEmail) result = result.not('imprint_email', 'is', null)
 
   switch (filters.followUp) {
     // A date that has arrived, whether this morning or a fortnight ago. Null
@@ -1056,7 +1069,7 @@ export async function readTimeline(leadId: string, limit = 200): Promise<Timelin
  * One unbroken literal, for the same reason LIBRARY_COLUMNS is one.
  */
 const AUDIT_COLUMNS =
-  'id, audited_at, checker_version, website_url, final_url, website_status, http_status, duration_ms, error, dns_resolves, is_https, tls_valid, tls_expires_at, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, psi_error, psi_checked_at, failed_codes'
+  'id, audited_at, checker_version, website_url, final_url, website_status, http_status, duration_ms, error, dns_resolves, is_https, tls_valid, tls_expires_at, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, imprint_url, imprint_has_address, imprint_has_phone, imprint_has_email, imprint_has_vat_id, has_privacy_policy, loads_external_fonts, has_external_maps, contact_form_insecure, psi_state, psi_performance, psi_lcp_ms, psi_cls, psi_error, psi_checked_at, failed_codes'
 
 interface AuditRecord {
   id: string
@@ -1082,6 +1095,15 @@ interface AuditRecord {
   platform: string | null
   platform_version: string | null
   presence_kind: string | null
+  imprint_url: string | null
+  imprint_has_address: boolean | null
+  imprint_has_phone: boolean | null
+  imprint_has_email: boolean | null
+  imprint_has_vat_id: boolean | null
+  has_privacy_policy: boolean | null
+  loads_external_fonts: boolean | null
+  has_external_maps: boolean | null
+  contact_form_insecure: boolean | null
   psi_state: PsiState
   psi_performance: number | null
   psi_lcp_ms: number | null
@@ -1116,6 +1138,15 @@ function toAudit(record: AuditRecord, findings: AuditFinding[]): LeadAudit {
     platform: record.platform,
     platformVersion: record.platform_version,
     presenceKind: record.presence_kind,
+    imprintUrl: record.imprint_url,
+    imprintHasAddress: record.imprint_has_address,
+    imprintHasPhone: record.imprint_has_phone,
+    imprintHasEmail: record.imprint_has_email,
+    imprintHasVatId: record.imprint_has_vat_id,
+    hasPrivacyPolicy: record.has_privacy_policy,
+    loadsExternalFonts: record.loads_external_fonts,
+    hasExternalMaps: record.has_external_maps,
+    contactFormInsecure: record.contact_form_insecure,
     psiState: record.psi_state,
     psiPerformance: record.psi_performance,
     psiLcpMs: record.psi_lcp_ms,

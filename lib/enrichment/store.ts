@@ -2,6 +2,7 @@ import 'server-only'
 
 import { CHECKER_VERSION, type Measurement } from '@/lib/enrichment/checker'
 import type { Finding } from '@/lib/enrichment/findings'
+import type { ImprintMeasurement } from '@/lib/enrichment/imprint'
 import type { PageSpeed } from '@/lib/enrichment/pagespeed'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -48,6 +49,7 @@ function shouldProfile(measurement: Measurement): boolean {
 export async function writeAudit(
   leadId: string,
   measurement: Measurement,
+  imprint: ImprintMeasurement | null,
   findings: Finding[],
 ): Promise<AuditWrite> {
   const supabase = createServiceClient()
@@ -88,8 +90,36 @@ export async function writeAudit(
       platform_version: measurement.platformVersion,
       presence_kind: measurement.presenceKind,
 
+      imprint_url: imprint?.imprintUrl ?? null,
+      imprint_has_address: imprint?.hasAddress ?? null,
+      imprint_has_phone: imprint?.hasPhone ?? null,
+      imprint_has_email: imprint?.hasEmail ?? null,
+      imprint_has_vat_id: imprint?.hasVatId ?? null,
+      has_privacy_policy: imprint?.hasPrivacyPolicy ?? null,
+      loads_external_fonts: imprint?.loadsExternalFonts ?? null,
+      has_external_maps: imprint?.hasExternalMaps ?? null,
+      contact_form_insecure: imprint?.contactFormInsecure ?? null,
+
       psi_state: psiPending ? 'pending' : 'skipped',
-      raw: measurement.raw,
+      /*
+       * The lookup's own state rides in `raw` rather than in a tenth column.
+       * It is the difference between "we looked and there is none" and "the
+       * lookup broke", which the judge needs and no query filters on — the
+       * same bargain `raw.freeSubdomain` and `raw.datedMarkers` already struck.
+       */
+      raw: imprint
+        ? {
+            ...(measurement.raw ?? {}),
+            imprint: {
+              state: imprint.state,
+              error: imprint.error,
+              attempts: imprint.attempts,
+              consentManager: imprint.consentManager,
+              linksReadable: imprint.linksReadable,
+              durationMs: imprint.durationMs,
+            },
+          }
+        : measurement.raw,
     })
     .select('id')
     .single()
@@ -112,9 +142,32 @@ export async function writeAudit(
     .neq('id', auditId)
     .in('psi_state', ['pending', 'running'])
 
+  /*
+   * The lead's own row: the pass is done, and possibly an address to write to.
+   *
+   * ONLY WHEN THE LOOKUP REACHED A VERDICT. On 'found' the two contact columns
+   * are written; on 'absent' they are written as null, because a business that
+   * has taken its Impressum down should not keep advertising the address we
+   * scraped off it last month. On 'error' — and when the stage did not run at
+   * all — they are left strictly alone: a timeout is not evidence that an
+   * address stopped existing, and letting a bad minute on the network delete
+   * the one email address in the book would be the worst kind of quiet loss.
+   */
+  const settled = imprint !== null && imprint.state !== 'error'
+
   await supabase
     .from('leads')
-    .update({ enrichment_state: 'done', enrichment_error: null })
+    .update({
+      enrichment_state: 'done',
+      enrichment_error: null,
+      ...(settled
+        ? {
+            imprint_email: imprint.email,
+            imprint_phone: imprint.phone,
+            imprint_fetched_at: new Date().toISOString(),
+          }
+        : {}),
+    })
     .eq('id', leadId)
 
   return { auditId, psiPending }

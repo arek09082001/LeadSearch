@@ -145,6 +145,11 @@ export const CSV_COLUMNS: Column[] = [
   },
   { header: 'Changed on', value: (lead) => day(lead.changedAt) },
   { header: 'Phone', value: (lead) => lead.phone ?? '' },
+  // Not a measurement, despite arriving with the audit — it is a way to reach
+  // the business, and reaching them in writing is most of what this file is
+  // opened for. Google supplies a number and practically never an address.
+  { header: 'Imprint email', value: (lead) => lead.imprintEmail ?? '' },
+  { header: 'Imprint phone', value: (lead) => lead.imprintPhone ?? '' },
   { header: 'Address', value: (lead) => lead.formattedAddress ?? '' },
   { header: 'City', value: (lead) => lead.city ?? '' },
   {

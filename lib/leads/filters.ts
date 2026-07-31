@@ -80,6 +80,7 @@ export function parseFilters(source: ParamSource): LeadFilters {
       AUDIT_FILTERS.map((entry) => entry.key),
     ),
     change: only<ChangeFilter>(readAll(source, 'chg'), CHANGE_FILTER_KEYS),
+    hasEmail: readOne(source, 'mail') === '1',
     followUp:
       followUp && FOLLOW_UP_FILTERS.some((entry) => entry.key === followUp)
         ? (followUp as FollowUpFilter)
@@ -172,6 +173,7 @@ export function toSearchParams(filters: LeadFilters): URLSearchParams {
   if (filters.scoreMax !== null) params.set('smax', String(filters.scoreMax))
   for (const audit of filters.audit) params.append('audit', audit)
   for (const change of filters.change) params.append('chg', change)
+  if (filters.hasEmail) params.set('mail', '1')
   if (filters.followUp) params.set('due', filters.followUp)
   if (filters.sort !== DEFAULT_FILTERS.sort) params.set('sort', filters.sort)
   if (filters.desc !== naturalDesc(filters.sort)) params.set('dir', filters.desc ? 'desc' : 'asc')
@@ -204,6 +206,9 @@ export function activeFilterCount(filters: LeadFilters): number {
     (filters.scoreMax !== null ? 1 : 0) +
     filters.audit.length +
     filters.change.length +
+    // Counted, unlike the bin: this narrows the book rather than swapping it
+    // for a different one, so "clear filters" has to be able to undo it.
+    (filters.hasEmail ? 1 : 0) +
     (filters.followUp ? 1 : 0)
   )
 }

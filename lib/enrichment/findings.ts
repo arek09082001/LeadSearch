@@ -1,4 +1,5 @@
 import type { Measurement } from '@/lib/enrichment/checker'
+import type { ImprintMeasurement } from '@/lib/enrichment/imprint'
 import type { PageSpeed } from '@/lib/enrichment/pagespeed'
 import {
   AUDIT_THRESHOLDS,
@@ -472,6 +473,172 @@ export function judgePerformance(psi: PageSpeed): Finding[] {
           ? `The page moves around under the reader while it loads — a layout-shift score of ${psi.cls.toFixed(2)}, where Google calls anything above 0.25 poor. It is why people tap the wrong thing.`
           : `The page holds still while it loads (layout shift ${psi.cls.toFixed(2)}).`,
         evidence,
+      ),
+    )
+  }
+
+  return findings
+}
+
+/* ------------------------------------------------------------------------- *
+ * The Impressum stage
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Diagnose what the site says about itself.
+ *
+ * A third judge for the same reason there is a second one: it reads a
+ * measurement that arrives from its own source, and keeping it separate means
+ * the Impressum criteria can be argued with without anyone re-reading the
+ * front-door rules. See `lib/enrichment/imprint.ts`.
+ *
+ * TWO GROUPS, AND THEY ARE GATED DIFFERENTLY. The imprint verdicts depend on
+ * having looked at an Impressum, so they are governed by `state`. The four page
+ * observations were read off the homepage the checker already fetched, and they
+ * stand whether or not the imprint lookup got anywhere.
+ *
+ * `no_imprint` fires on `'absent'` and on nothing else. A lookup that broke —
+ * a timeout, a PDF, a link to head office — is a fact about our run, and
+ * turning it into a critical finding would be the pass accusing a business of
+ * something the pass merely failed to check.
+ *
+ * The tone throughout is deliberate. These are the strongest openers in the
+ * book precisely because they are checkable, and overselling them is how that
+ * advantage gets spent: the operator sells websites and is not anybody's
+ * lawyer, so a finding here states what is missing and what it costs, and never
+ * asserts a legal consequence.
+ */
+export function judgeImprint(imprint: ImprintMeasurement | null): Finding[] {
+  // Nobody looked — not a real site, or the pass ran out of time. Rule 1.
+  if (!imprint) return []
+
+  const findings: Finding[] = []
+
+  /* ---- the legal notice ------------------------------------------------ */
+
+  if (imprint.state === 'absent') {
+    findings.push(
+      finding(
+        'no_imprint',
+        false,
+        'There is no Impressum. We followed the footer, then asked for /impressum and /impressum.html, and found nothing. It is the first thing a German customer looks for when deciding whether a business is real — and the first thing a competitor looks for when they want to make trouble.',
+        { attempts: imprint.attempts },
+      ),
+    )
+  }
+
+  if (imprint.state === 'found') {
+    findings.push(
+      finding('no_imprint', true, `An Impressum is published at ${imprint.imprintUrl}.`, {
+        imprintUrl: imprint.imprintUrl,
+      }),
+    )
+
+    /*
+     * Missing address, or missing email. Not the telephone number.
+     *
+     * §5 TMG asks for an address a summons can be served at and "die Adresse
+     * der elektronischen Post"; a telephone number is the one element that is
+     * genuinely arguable, and hanging a critical finding on the disputed part
+     * is how the operator gets corrected mid-call. The number is measured and
+     * carried below as evidence either way.
+     */
+    const missing: string[] = []
+    if (imprint.hasAddress === false) missing.push('a postal address')
+    if (imprint.hasEmail === false) missing.push('an email address')
+
+    const evidence = {
+      imprintUrl: imprint.imprintUrl,
+      hasAddress: imprint.hasAddress,
+      hasEmail: imprint.hasEmail,
+      hasPhone: imprint.hasPhone,
+      missing,
+    }
+
+    findings.push(
+      finding(
+        'imprint_incomplete',
+        missing.length === 0,
+        missing.length
+          ? `The Impressum is there but does not state ${missing.join(' or ')}. Half an Impressum protects nobody, and it is the kind of gap that reads as carelessness to anyone who goes looking.`
+          : 'The Impressum states an address and a way to reach them.',
+        evidence,
+      ),
+    )
+
+    if (imprint.hasVatId !== null) {
+      findings.push(
+        finding(
+          'no_vat_id',
+          imprint.hasVatId,
+          imprint.hasVatId
+            ? 'The Impressum states a VAT number.'
+            : 'No VAT number in the Impressum. It is only required of businesses that have one, so this may be perfectly correct — worth asking about, not worth claiming.',
+          { imprintUrl: imprint.imprintUrl },
+        ),
+      )
+    }
+  }
+
+  /* ---- what the pages we read gave away -------------------------------- */
+
+  if (imprint.hasPrivacyPolicy !== null) {
+    findings.push(
+      finding(
+        'no_privacy_policy',
+        imprint.hasPrivacyPolicy,
+        imprint.hasPrivacyPolicy
+          ? 'A privacy policy is linked.'
+          : 'No privacy policy is linked from any page we read. Every site that has a contact form, or loads anything from another company’s servers, is expected to have one — and the pages below show this one does both.',
+      ),
+    )
+  }
+
+  if (imprint.loadsExternalFonts !== null) {
+    findings.push(
+      finding(
+        'external_fonts_cdn',
+        !imprint.loadsExternalFonts,
+        imprint.loadsExternalFonts
+          ? 'The site loads its fonts from Google’s servers, which hands every visitor’s IP address to Google before the page has finished rendering. Hosting the same fonts on their own server is a half-hour job and removes the transfer entirely.'
+          : 'Fonts are served from the site’s own domain.',
+      ),
+    )
+  }
+
+  if (imprint.hasExternalMaps !== null) {
+    /*
+     * The measurement stands; the judgement is withheld with a reason.
+     *
+     * We can see the frame in the markup. What we cannot see from the server's
+     * HTML is a consent tool that would gate it in the browser — so when one is
+     * detected, this passes and says which. A passing row that names its reason
+     * is what the diagnosis's "these are fine" list is for, and it is a great
+     * deal more honest than a fault we would have to withdraw on the call.
+     */
+    const excused = imprint.hasExternalMaps && imprint.consentManager !== null
+    findings.push(
+      finding(
+        'embedded_maps_no_consent',
+        !imprint.hasExternalMaps || excused,
+        imprint.hasExternalMaps
+          ? excused
+            ? `A Google Maps frame is embedded, but ${imprint.consentManager} is present and presumably asks first.`
+            : 'A Google Maps frame loads straight from Google as soon as the page opens, before the visitor has agreed to anything. No consent tool was found on the page.'
+          : 'No third-party map is embedded.',
+        { consentManager: imprint.consentManager },
+      ),
+    )
+  }
+
+  if (imprint.contactFormInsecure !== null) {
+    findings.push(
+      finding(
+        'insecure_contact_form',
+        !imprint.contactFormInsecure,
+        imprint.contactFormInsecure
+          ? 'There is a form asking for a name and a message on a page that is not encrypted, so everything typed into it travels in the clear. Chrome writes “Not secure” next to the address while somebody fills it in.'
+          : 'Nothing is collected over an unencrypted connection.',
       ),
     )
   }

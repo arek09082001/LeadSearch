@@ -31,6 +31,7 @@ export type FindingCategory =
   | 'presence'
   | 'availability'
   | 'trust'
+  | 'compliance'
   | 'mobile'
   | 'performance'
   | 'platform'
@@ -45,6 +46,13 @@ export const FINDING_CODES = [
   'http_error',
   'no_https',
   'invalid_certificate',
+  'no_imprint',
+  'imprint_incomplete',
+  'no_privacy_policy',
+  'insecure_contact_form',
+  'external_fonts_cdn',
+  'embedded_maps_no_consent',
+  'no_vat_id',
   'not_mobile_friendly',
   'psi_poor',
   'psi_weak',
@@ -114,6 +122,50 @@ export const FINDING_SPECS: Record<FindingCode, FindingSpec> = {
     severity: 'critical',
     mark: 'Bad certificate',
     label: 'The security certificate does not verify',
+  },
+  no_imprint: {
+    category: 'compliance',
+    severity: 'critical',
+    mark: 'No imprint',
+    label: 'No Impressum',
+  },
+  imprint_incomplete: {
+    category: 'compliance',
+    severity: 'critical',
+    mark: 'Thin imprint',
+    label: 'The Impressum does not name what it has to',
+  },
+  no_privacy_policy: {
+    category: 'compliance',
+    severity: 'critical',
+    mark: 'No privacy',
+    label: 'No privacy policy is linked',
+  },
+  insecure_contact_form: {
+    // Trust rather than compliance: this one is about what the visitor's
+    // browser tells them, not about what the page fails to say.
+    category: 'trust',
+    severity: 'warning',
+    mark: 'Open form',
+    label: 'A contact form on an unencrypted page',
+  },
+  external_fonts_cdn: {
+    category: 'compliance',
+    severity: 'warning',
+    mark: 'Google fonts',
+    label: 'Fonts loaded from Google’s servers',
+  },
+  embedded_maps_no_consent: {
+    category: 'compliance',
+    severity: 'warning',
+    mark: 'Maps embed',
+    label: 'A Google Maps frame loads unasked',
+  },
+  no_vat_id: {
+    category: 'compliance',
+    severity: 'info',
+    mark: 'No VAT ID',
+    label: 'No VAT number in the Impressum',
   },
   not_mobile_friendly: {
     category: 'mobile',

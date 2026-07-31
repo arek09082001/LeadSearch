@@ -93,7 +93,7 @@ export interface ScoringConfig {
 }
 
 export const SCORING_CONFIG: ScoringConfig = {
-  version: '2026-07-30.1',
+  version: '2026-07-31.1',
 
   points: {
     /* ---- absence and death: the best leads ------------------------------ */
@@ -105,6 +105,37 @@ export const SCORING_CONFIG: ScoringConfig = {
     /* ---- broken trust --------------------------------------------------- */
     no_https: 25,
     invalid_certificate: 25,
+
+    /* ---- what the site does not say -------------------------------------
+     *
+     * This scale ranks "worth a call to sell a website", and a legal gap is a
+     * superb door-opener but a poor reason to rebuild — a missing Impressum is
+     * twenty minutes of work. So the block sits under the structural faults
+     * while staying loud enough to matter.
+     *
+     * Calibration, because it was chosen rather than stumbled into. The worst
+     * case here is six at once — `no_imprint` and `imprint_incomplete` are
+     * mutually exclusive by construction — which under `diminishing` comes to
+     * 36.8 points and a strength of 56.6. That sits just under
+     * COLD_SCORE_FLOOR (60), and the arithmetic either side of it is the point:
+     *
+     *   compliance faults alone          56.6  — below the cold-call floor
+     *   ...plus one real website fault   63.7  — above it
+     *   a business with no website       69.2  — still ahead of both
+     *
+     * So a legal gap opens the call but does not by itself put a business in
+     * the queue, and a shabby-but-lawful site never outranks one with no site
+     * at all. That is what this product is for, and it is why
+     * `no_privacy_policy` is 16 rather than 20: at 20 the first line lands at
+     * 61 and compliance alone starts filling the cold queue.
+     */
+    no_imprint: 24,
+    no_privacy_policy: 16,
+    imprint_incomplete: 14,
+    insecure_contact_form: 12,
+    external_fonts_cdn: 10,
+    embedded_maps_no_consent: 8,
+    no_vat_id: 2,
 
     /* ---- not a real site ------------------------------------------------ */
     social_only: 35,
