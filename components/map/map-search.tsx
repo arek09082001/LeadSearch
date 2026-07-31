@@ -5,6 +5,7 @@ import { CategorySelect } from '@/components/search/category-select'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT } from '@/components/ui/controls'
 import { RADIUS_LIMITS, formatPoint, formatRadius, type Point } from '@/lib/map/geometry'
+import { formatPlaceType } from '@/lib/places-types'
 
 /*
  * Searching without typing a place.
@@ -31,12 +32,14 @@ export function MapSearch({
   center,
   radiusM,
   category,
+  query,
   running,
   resultCount,
   plottedCount,
   cachedAt,
   onRadius,
   onCategory,
+  onQuery,
   onClearCenter,
   onSearch,
   onCancel,
@@ -44,6 +47,8 @@ export function MapSearch({
   center: Point | null
   radiusM: number
   category: string
+  /** Free text, prefilled from the category and editable. Empty is a real choice. */
+  query: string
   running: boolean
   /** How many live rows the search returned, so the panel states its provenance. */
   resultCount: number
@@ -60,11 +65,12 @@ export function MapSearch({
   cachedAt: string | null
   onRadius: (metres: number) => void
   onCategory: (token: string) => void
+  onQuery: (text: string) => void
   onClearCenter: () => void
   onSearch: (refresh: boolean) => void
   onCancel: () => void
 }) {
-  const canSearch = Boolean(center && category)
+  const canSearch = Boolean(center && (category || query.trim()))
 
   return (
     /*
@@ -149,6 +155,41 @@ export function MapSearch({
           <CategorySelect value={category} onChange={onCategory} disabled={running} />
         </label>
 
+        {/*
+          Words, prefilled with the trade's own name.
+
+          Picking a category writes its label in here so the commonest search —
+          "this trade, in this circle" — needs no typing at all, and it stays
+          editable because "Zahnarzt Notdienst" is a different question from
+          "Zahnarzt". The prefill never overwrites something typed.
+
+          Clearing it is a real choice rather than an omission, and the line
+          underneath says what it changes: with no words Google answers the
+          circle in one billable request; with words it searches wider and pages,
+          which costs more than one. On a $0 ceiling that belongs on screen
+          before the button, not in the receipt after it.
+        */}
+        <label className="flex flex-col gap-1">
+          <span className="label text-ink-faint">Words</span>
+          <input
+            type="text"
+            value={query}
+            maxLength={200}
+            disabled={running}
+            onChange={(event) => onQuery(event.target.value)}
+            placeholder={category ? formatPlaceType(category) : 'Zahnarzt'}
+            autoComplete="off"
+            spellCheck={false}
+            className={INPUT}
+          />
+        </label>
+
+        <p className="text-sm text-ink-faint">
+          {query.trim()
+            ? 'Words search wider than the circle and page — more than one billable request.'
+            : 'No words: one request, everything of this type inside the circle.'}
+        </p>
+
         <div className="flex items-center gap-2">
           {running ? (
             <CommandButton type="button" onClick={onCancel} className="flex-1 justify-center">
@@ -166,7 +207,7 @@ export function MapSearch({
                   canSearch
                     ? undefined
                     : center
-                      ? 'Pick a category to search for'
+                      ? 'Pick a category, or type what to look for'
                       : 'Click the map to set a centre'
                 }
               >

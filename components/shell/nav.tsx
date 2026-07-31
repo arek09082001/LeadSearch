@@ -65,7 +65,19 @@ export function Nav() {
   }, [router, carried])
 
   return (
-    <nav aria-label="Surfaces" className="flex items-stretch">
+    /*
+      Five surfaces do not fit on one 360px rule, and the label is the thing
+      DESIGN.md says never drops — so the rule wraps instead.
+      "SEARCH LEADS MAP OUTREACH OUTCOMES" is 320px of type before padding, and
+      with the sign-out control beside it that is 20px past a 360px phone. Every
+      way of buying those 20px costs something worse: shaving the padding leaves
+      MAP with a 32px-wide tap target, scrolling the rule hides surfaces behind a
+      gesture nothing announces, and dropping the inactive labels means
+      navigating by icon. A second line below ~400px costs one row of masthead on
+      the width where this product is a reference rather than an instrument, and
+      costs nothing at all above it.
+    */
+    <nav aria-label="Surfaces" className="flex flex-wrap items-stretch">
       {SURFACES.map(({ href, label, key, Icon }) => {
         const active = isActive(pathname, href)
         return (

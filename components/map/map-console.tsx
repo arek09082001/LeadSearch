@@ -25,6 +25,7 @@ import type {
   SavedView,
 } from '@/lib/leads/types'
 import type { Point } from '@/lib/map/geometry'
+import { formatPlaceType } from '@/lib/places-types'
 import type { BudgetState } from '@/lib/search/types'
 
 /*
@@ -133,7 +134,28 @@ export function MapConsole({
   const [center, setCenter] = useState<Point | null>(null)
   const [radiusM, setRadiusM] = useState(DEFAULT_RADIUS_M)
   const [category, setCategory] = useState('')
+  const [words, setWords] = useState('')
   const [selectedResults, setSelectedResults] = useState<Set<string>>(new Set())
+
+  /*
+   * Choosing a trade writes its name into the words field.
+   *
+   * The commonest search on this surface is "this trade, in this circle", and
+   * making the operator type a word he has just picked from a list is the kind
+   * of small tax that makes a tool feel unfinished. It is a prefill and not a
+   * lock: anything he has typed himself survives a change of category, because
+   * the only thing it will overwrite is a field that is empty or still holding
+   * the previous category's own label.
+   */
+  const onCategory = useCallback(
+    (token: string) => {
+      if (words === '' || words === formatPlaceType(category)) {
+        setWords(token ? formatPlaceType(token) : '')
+      }
+      setCategory(token)
+    },
+    [words, category],
+  )
 
   /* --- What the panel is reading ---------------------------------------- */
 
@@ -274,14 +296,21 @@ export function MapConsole({
 
   const search = useCallback(
     (refresh: boolean) => {
-      if (!center || !category) return
+      const text = words.trim()
+      if (!center || (!category && !text)) return
       // A new result set invalidates the old ticks, exactly as on the search
       // surface: they would otherwise save businesses no longer on screen.
       setSelectedResults(new Set())
       setFocusResultId(null)
-      void run({ query: '', category, center, radiusM, refresh })
+      /*
+       * `location` is deliberately never sent: this surface has a point, and a
+       * point is what `center` is for. Sending both would ask the provider to
+       * fold a place name into the text as well, which is the geocoding this
+       * whole surface exists to avoid paying for.
+       */
+      void run({ query: text, category: category || undefined, center, radiusM, refresh })
     },
-    [center, category, radiusM, run],
+    [center, category, words, radiusM, run],
   )
 
   /*
@@ -478,6 +507,8 @@ export function MapConsole({
         selected={selectedResults}
         onSelect={setSelectedResults}
         searchId={state.searchId}
+        // No tick boxes on a field of marks, so no shift-click run to advertise.
+        rangeHint={false}
         onSaved={(items) => {
           markSaved(items)
           // The saved leads are now in the book and belong on the map as amber.
@@ -514,12 +545,14 @@ export function MapConsole({
               center={center}
               radiusM={radiusM}
               category={category}
+              query={words}
               running={state.status === 'running'}
               resultCount={state.rows.length}
               plottedCount={plotted}
               cachedAt={state.cachedAt}
               onRadius={setRadiusM}
-              onCategory={setCategory}
+              onCategory={onCategory}
+              onQuery={setWords}
               onClearCenter={() => setCenter(null)}
               onSearch={search}
               onCancel={cancel}
