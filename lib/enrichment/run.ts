@@ -254,7 +254,7 @@ async function profileOne(job: PerformanceJob, limited: { hit: boolean }): Promi
      */
     if (psi.retryable) limited.hit = true
 
-    await recordPerformance(job.auditId, psi, judgePerformance(psi), job.attempts)
+    await recordPerformance(job, psi, judgePerformance(psi))
   } catch (error) {
     const message = error instanceof Error ? error.message : 'PageSpeed failed unexpectedly.'
     console.error('[enrichment] pagespeed failed', { auditId: job.auditId, message })
@@ -270,7 +270,7 @@ async function profileOne(job: PerformanceJob, limited: { hit: boolean }): Promi
      * runtime, neither of which is a verdict on the website.
      */
     await recordPerformance(
-      job.auditId,
+      job,
       {
         state: 'failed',
         retryable: true,
@@ -281,9 +281,9 @@ async function profileOne(job: PerformanceJob, limited: { hit: boolean }): Promi
         testedUrl: job.url,
         fetchedAt: new Date().toISOString(),
         reportUrl: null,
+        screenshot: null,
       },
       [],
-      job.attempts,
     ).catch(() => {})
   }
 }

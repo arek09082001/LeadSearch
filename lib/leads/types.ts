@@ -459,6 +459,16 @@ export interface LeadAudit {
   psiCls: number | null
   psiError: string | null
   psiCheckedAt: string | null
+  /**
+   * Object key for the mobile screenshot Lighthouse returned with the PageSpeed
+   * run, or null when there is none — which includes every audit that never
+   * reached that stage.
+   *
+   * A key, never a URL. The bucket is private; the surface asks
+   * /api/audits/[id]/screenshot for a signed link, and that route checks the
+   * session before it signs anything.
+   */
+  screenshotPath: string | null
 
   findings: AuditFinding[]
 }

@@ -57,6 +57,24 @@ export interface PageSpeed {
    * open himself. That is what turns a number into proof.
    */
   reportUrl: string | null
+  /**
+   * The last frame Lighthouse rendered, as a `data:image/jpeg;base64,...` URI.
+   *
+   * ALREADY PAID FOR. Lighthouse has to render the page on a simulated phone to
+   * produce the numbers above, and it returns the frame it ended on in the same
+   * response under `audits['final-screenshot']`. That audit sits in the
+   * performance category with weight 0 and group 'hidden', so the request this
+   * module already makes — `category=performance`, `strategy=mobile` — receives
+   * it without asking for anything more. There is no second call, no headless
+   * browser and no extra quota behind this field.
+   *
+   * It is deliberately NOT stored on the audit row. The caller writes the bytes
+   * to Storage and keeps a path; see lib/enrichment/screenshot.ts.
+   *
+   * Null is ordinary: Lighthouse omits it in timespan mode and can fail to
+   * produce a frame at all. A missing picture is not a failed measurement.
+   */
+  screenshot: string | null
 }
 
 function skipped(reason: string): PageSpeed {
@@ -70,6 +88,7 @@ function skipped(reason: string): PageSpeed {
     testedUrl: null,
     fetchedAt: new Date().toISOString(),
     reportUrl: null,
+    screenshot: null,
   }
 }
 
@@ -84,6 +103,7 @@ function failed(url: string, reason: string, retryable = false): PageSpeed {
     testedUrl: url,
     fetchedAt: new Date().toISOString(),
     reportUrl: reportUrl(url),
+    screenshot: null,
   }
 }
 
@@ -113,6 +133,39 @@ function numericValue(audits: Record<string, unknown> | undefined, id: string): 
   const audit = audits?.[id] as { numericValue?: unknown } | undefined
   const value = audit?.numericValue
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Past this, the response is not a phone screenshot and we do not want it in
+ * memory or in Storage.
+ *
+ * A 412x823 JPEG is 30-120 KB, and base64 adds a third. Three megabytes is
+ * therefore about twenty times the largest plausible frame — wide enough that it
+ * will never reject a real screenshot, narrow enough that a malformed or hostile
+ * response cannot make a serverless function hold a hundred megabytes while it
+ * decodes something that was never an image.
+ */
+const MAX_SCREENSHOT_CHARS = 3_000_000
+
+/**
+ * The frame Lighthouse ended on.
+ *
+ * Read defensively rather than trustingly, because this is the one field on the
+ * response we take on faith about its shape: the numbers above are validated by
+ * being numbers, and a data URI is a string that could be anything. Anything
+ * that is not a plausible image data URI becomes null, which the rest of the
+ * pipeline already treats as the ordinary case.
+ */
+function finalScreenshot(audits: Record<string, unknown> | undefined): string | null {
+  const details = (
+    audits?.['final-screenshot'] as { details?: { data?: unknown } } | undefined
+  )?.details
+  const data = details?.data
+
+  if (typeof data !== 'string') return null
+  if (!data.startsWith('data:image/')) return null
+  if (data.length > MAX_SCREENSHOT_CHARS) return null
+  return data
 }
 
 /**
@@ -196,6 +249,7 @@ export async function measurePageSpeed(url: string): Promise<PageSpeed> {
       testedUrl: lighthouse?.finalUrl ?? url,
       fetchedAt: new Date().toISOString(),
       reportUrl: reportUrl(url),
+      screenshot: finalScreenshot(lighthouse?.audits),
     }
   } catch (error) {
     // A timeout or a transport failure says nothing about the site either.
