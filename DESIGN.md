@@ -197,6 +197,11 @@ with it.
 
 **Nothing is rounded.** `--radius-none: 0px` is the only radius token and there is no other.
 
+The single exception is the brand mark in the wordmark, which arrives as a supplied raster
+with its own rounded-square silhouette. It is not chrome this system draws, so it is not this
+system's to square off; it is also the only raster in the frame. Both exceptions stop at the
+mark — nothing else borrows the radius, and no other interface element is an image.
+
 Structure is expressed with rules, not containers. Prefer a hairline border or a divided
 list over a box; a "card" is not part of this vocabulary. Where emphasis is needed, use a
 1px colored left border (never thicker), as the error state does.
@@ -206,8 +211,8 @@ fills. Emoji and Unicode glyphs are not an icon system.
 
 ## Components
 
-**Masthead** — sticky, `border-b` `rule`. Left: wordmark in `label`/`ink` with a
-`rule-strong` divider. Centre: nav. Right: operator email in `data`/`micro` plus a sign-out
+**Masthead** — sticky, `border-b` `rule`. Left: wordmark — the 16px mark plus the name in
+`label`/`ink` — with a `rule-strong` divider. Centre: nav. Right: operator email in `data`/`micro` plus a sign-out
 icon button that goes `alert` on hover.
 
 **Nav** — icon + `label` + key hint. The active surface is marked by a 1px `signal` rule

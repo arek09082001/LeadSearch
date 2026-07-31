@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 
 import { LoginForm } from '@/app/login/login-form'
+import { Wordmark } from '@/components/shell/wordmark'
 
 export const metadata: Metadata = { title: 'Sign in — Lead Engine' }
 
@@ -8,7 +9,7 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-dvh flex-1 flex-col">
       <header className="border-b border-rule px-3 py-2">
-        <span className="label text-ink">Lead Engine</span>
+        <Wordmark />
       </header>
 
       <div className="flex flex-1 items-center justify-center px-6 py-16">
