@@ -212,8 +212,11 @@ icon button that goes `alert` on hover.
 
 **Nav** — icon + `label` + key hint. The active surface is marked by a 1px `signal` rule
 along the bottom edge and `ink` text; inactive is `ink-faint`, hover `ink-dim`. It is a
-rule, never a pill or a fill. `Alt+1/2/3` jump between surfaces — `Alt` deliberately, so
-plain digits stay free for filter and search fields.
+rule, never a pill or a fill. `Alt+1/2/3/4` jump between surfaces — `Alt` deliberately, so
+plain digits stay free for filter and search fields. Below `sm` the inactive labels drop and
+only their icons remain; the active one keeps its word, because that is the one being
+checked. Moving between Leads and Map carries the query string, since those two draw the
+same book and the filters are the URL.
 
 **Status strip** — a `panel` band: a 1.5px square dot (`live` green or `signal` amber), the
 provenance label, the explanatory sentence, and a right-aligned detail slot for age or
@@ -237,6 +240,22 @@ scrolls: it is text to read, not a data column.
 
 **Input** — `ground` fill, `rule` border, `data` face. Border goes `rule-strong` on hover and
 `signal` on focus. Global `:focus-visible` is a 1px `signal` outline at 1px offset.
+
+**Map** — the one surface drawn into a canvas, so it is the one place the tokens appear as
+literals (`lib/map/palette.ts`) rather than as classes. The basemap is authored, never a
+stock style: `ground` for the field, `panel` for water, `rule` and `rule-strong` for roads
+and borders, `ink-dim` and `ink-faint` for the few labels, and no road below the zoom at
+which it starts saying something. Everything on it is underneath — the marks are the only
+thing allowed to carry colour.
+
+Marks follow the product's split exactly. A saved lead is amber to the degree it scores, on
+a ramp from `ink-faint` at 0 to `signal` at 100 that accelerates past `COLD_SCORE_FLOOR`;
+size repeats the same fact, so a high scorer survives being glanced at. A lead nothing has
+audited yet is hollow rather than grey, because grey already means "measured, and worth
+little". A search result is `live` green and its ring is too, since both expire. Clusters
+are a dark disc with a rule around it coloured by the best lead inside — a container holding
+a count, not a heat map. Overlays on the canvas — the search panel, the legend — are ruled
+rectangles in the same grammar as every band: no radius, no shadow, `ground` at 95%.
 
 ## Do's and Don'ts
 

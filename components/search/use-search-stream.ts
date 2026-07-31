@@ -51,7 +51,16 @@ const INITIAL: SearchStreamState = {
   resolvedAddress: null,
 }
 
-export function useSearchStream(initialBudget: BudgetState) {
+/**
+ * `initialBudget` may be null on a surface whose main job is not searching.
+ *
+ * The map is that surface: it draws the book out of our own database and is
+ * useful with the ledger unreadable, where the search page is not. A null here
+ * means the readout has nothing to draw yet, exactly as it has before the first
+ * `meta` event — it never means the ceiling is unenforced, which only the server
+ * decides.
+ */
+export function useSearchStream(initialBudget: BudgetState | null) {
   const [state, setState] = useState<SearchStreamState>({ ...INITIAL, budget: initialBudget })
   const abortRef = useRef<AbortController | null>(null)
 
