@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { IconAlert, IconPulse, IconStrike, IconUndo } from '@/components/icons'
 import { BulkBar } from '@/components/leads/bulk-bar'
 import { EmptyLibrary, EmptyResult } from '@/components/leads/empty-library'
+import { ExportCsv } from '@/components/leads/export-csv'
 import { FilterBar } from '@/components/leads/filter-bar'
 import { LeadsTable } from '@/components/leads/leads-table'
 import { SavedViews } from '@/components/leads/saved-views'
@@ -321,6 +322,12 @@ export function LeadsConsole({
           </span>
         ) : null}
 
+        {/*
+          The export takes the query string this page was drawn from, so the
+          file is this view and cannot be anything else.
+        */}
+        <ExportCsv query={query} count={listing.total} />
+
         <button
           type="button"
           onClick={() => navigate({ ...filters, deleted: !filters.deleted, page: 1 })}
@@ -359,16 +366,28 @@ export function LeadsConsole({
         </div>
       ) : null}
 
+      {/*
+        A receipt for something that has already happened, so it is polite: it
+        waits for a gap rather than interrupting. The band appears and vanishes
+        on a timer, and the operator's eye is on the table when it does.
+      */}
       {notice && !undo ? (
-        <div className="border-b border-rule bg-panel px-3 py-1.5">
+        <div role="status" className="border-b border-rule bg-panel px-3 py-1.5">
           <span className="text-sm text-ink-dim">{notice}</span>
         </div>
       ) : null}
 
+      {/*
+        `alert`, not `status`: an action he asked for did not happen, and unlike
+        the notice above this one does not clear itself.
+      */}
       {error ? (
-        <div className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2">
+        <div
+          role="alert"
+          className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2"
+        >
           <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
-          <p className="text-sm text-ink-dim">{error}</p>
+          <p className="text-sm wrap-anywhere text-ink-dim">{error}</p>
         </div>
       ) : null}
 
@@ -407,6 +426,7 @@ export function LeadsConsole({
                 scoreMin: null,
                 scoreMax: null,
                 audit: [],
+                change: [],
                 followUp: null,
                 page: 1,
               })

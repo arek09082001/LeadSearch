@@ -1,6 +1,7 @@
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { FINDING_SPECS, isFindingCode, type FindingSeverity } from '@/lib/enrichment/vocabulary'
-import type { ScoreFactor, StoredScore } from '@/lib/scoring/score'
+import { shortDate } from '@/lib/leads/dates'
+import type { ScoreFactor, ScoreMovement, StoredScore } from '@/lib/scoring/score'
 
 /*
  * Why this lead is an 84.
@@ -20,11 +21,6 @@ import type { ScoreFactor, StoredScore } from '@/lib/scoring/score'
  * and an informative one recedes — because the score is a reading of those
  * findings and must not look like a separate opinion.
  */
-
-function shortDate(iso: string): string {
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
-}
 
 /** `12.5` but `45`, never `45.00`. The column is narrow and the zeros say nothing. */
 function points(value: number): string {
@@ -88,7 +84,95 @@ function Step({ label, value, strong }: { label: string; value: string; strong?:
   )
 }
 
-export function ScoreBreakdown({ score }: { score: StoredScore | null }) {
+/**
+ * How the score got here from wherever it was.
+ *
+ * The case this exists for, in full: a lead sits at 94 because it has no
+ * website. The refresh pass finds that it now has one. The audit is re-run, the
+ * `no_website` fault — 45 of the 65 points on the scale — is gone, and the lead
+ * comes back at 31. Every step of that is correct and none of it is visible: the
+ * operator remembers a 94, finds a 31, and has no way to tell a business that
+ * fixed its website from a scorer that broke.
+ *
+ * So the movement is stated, with the faults that moved it named in the same
+ * vocabulary the diagnosis above uses. "Fixed: No website at all" IS the
+ * sentence "they built a website", said in the words the rest of the product
+ * already speaks — and derived from the stored arithmetic rather than from a
+ * second record of what happened, so it cannot disagree with the number.
+ *
+ * The direction is carried by the sign and the word, never by red and green.
+ * `alert` in this product means failure and destructive intent, and a lead
+ * getting better is neither.
+ */
+function Movement({ movement }: { movement: ScoreMovement }) {
+  const { delta } = movement
+
+  /*
+   * A score can move its reasoning without moving its number — one fault
+   * swapped for another worth the same. "Level 0" is not a sentence anybody
+   * writes; the interesting part is the two lines underneath, and this line
+   * should get out of their way rather than put a zero in front of them.
+   */
+  const heading =
+    delta === null
+      ? 'Score withheld'
+      : delta === 0
+        ? 'Same score, different faults'
+        : `${delta < 0 ? 'Down' : 'Up'} ${Math.abs(delta)}`
+
+  return (
+    <div className="border-b border-rule px-3 py-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+        <span className="label text-ink-dim">{heading}</span>
+        <span className="font-data text-micro text-ink-faint">
+          {movement.from ?? '—'} → {movement.to ?? '—'} · {shortDate(movement.when)}
+        </span>
+      </div>
+
+      {/*
+        Faults that went away, first. That is the direction that costs him a
+        lead, and it is the one he will not otherwise believe.
+      */}
+      {movement.fixed.length ? (
+        <p className="mt-1 max-w-[52ch] text-sm text-ink">
+          <span className="label text-ink-faint">Fixed</span>{' '}
+          {movement.fixed.map((factor) => label(factor)).join(', ')}.
+        </p>
+      ) : null}
+
+      {movement.appeared.length ? (
+        <p className="mt-1 max-w-[52ch] text-sm text-ink-dim">
+          <span className="label text-ink-faint">New</span>{' '}
+          {movement.appeared.map((factor) => label(factor)).join(', ')}.
+        </p>
+      ) : null}
+
+      {/*
+        A score that moved because the weights moved is not a score that moved
+        because the business did, and confusing the two would send him out to
+        call somebody about a config edit.
+      */}
+      {movement.configChanged ? (
+        <p className="mt-1 max-w-[52ch] text-sm text-ink-faint">
+          The weights changed between these two scores, so some of this movement is the
+          ranking, not the business.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function label(factor: ScoreFactor): string {
+  return isFindingCode(factor.code) ? FINDING_SPECS[factor.code].label : factor.label
+}
+
+export function ScoreBreakdown({
+  score,
+  movement,
+}: {
+  score: StoredScore | null
+  movement: ScoreMovement | null
+}) {
   /*
    * Never scored is not scored zero, and the two must never look alike. One
    * means the pass has not reached this lead; the other is a verdict.
@@ -137,6 +221,15 @@ export function ScoreBreakdown({ score }: { score: StoredScore | null }) {
           {breakdown.excluded.reason}
         </p>
       ) : null}
+
+      {/*
+        Directly under the number, above the arithmetic. The question "why has
+        this moved" comes before "how was it computed", and a movement buried
+        beneath twenty lines of factors is one he would only find by looking for
+        it — which is exactly what he cannot do, because he does not yet know
+        anything moved.
+      */}
+      {movement ? <Movement movement={movement} /> : null}
 
       {breakdown ? (
         <>

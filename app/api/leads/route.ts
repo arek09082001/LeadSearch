@@ -4,7 +4,7 @@ import { errorResponse, readJson, requireSession } from '@/lib/api/guard'
 import { runEnrichment } from '@/lib/enrichment/run'
 import { parseFilters } from '@/lib/leads/filters'
 import { queryLeads, saveLeads } from '@/lib/leads/repository'
-import type { SaveCandidate, SaveRequest } from '@/lib/leads/types'
+import { LIMITS, type SaveCandidate, type SaveRequest } from '@/lib/leads/types'
 
 /*
  * The save route. This is the only door into the leads library.
@@ -22,7 +22,8 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const MAX_CANDIDATES = 200
-const MAX_NOTE_LENGTH = 2000
+/** The library's own ceiling, so the route and the field that feeds it agree. */
+const MAX_NOTE_LENGTH = LIMITS.note
 
 function parseCandidate(value: unknown): SaveCandidate | null {
   if (typeof value !== 'object' || value === null) return null

@@ -147,6 +147,37 @@ export async function writeFindings(auditId: string, findings: Finding[]): Promi
   if (error) throw new Error(error.message)
 }
 
+/**
+ * Mark leads for the background pass. Returns how many are now waiting.
+ *
+ * Here rather than in the leads repository, even though it writes to `leads`:
+ * it is the enrichment queue's own door, and three callers need it — saving,
+ * the bulk re-audit, and the refresh pass when a change makes an audit wrong.
+ * Putting it in the repository made the refresh pass import the repository,
+ * which imports the refresh pass, and a module cycle is not a thing to leave
+ * lying under a background job.
+ */
+export async function queueEnrichment(leadIds: string[]): Promise<number> {
+  if (!leadIds.length) return 0
+
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('leads')
+    .update({
+      enrichment_state: 'queued',
+      enrichment_queued_at: new Date().toISOString(),
+      enrichment_error: null,
+    })
+    .in('id', leadIds)
+    .select('id')
+
+  if (error) {
+    console.error('[enrichment] could not queue enrichment', error.message)
+    return 0
+  }
+  return data?.length ?? 0
+}
+
 export async function failLead(leadId: string, message: string): Promise<void> {
   await createServiceClient()
     .from('leads')
@@ -161,6 +192,8 @@ export async function failLead(leadId: string, message: string): Promise<void> {
 export interface PerformanceJob {
   auditId: string
   url: string
+  /** How many times PageSpeed has already been asked about this audit. */
+  attempts: number
 }
 
 /**
@@ -180,6 +213,13 @@ export async function claimPerformanceWork(limit: number): Promise<PerformanceJo
     .from('lead_audits')
     .select('id')
     .eq('psi_state', 'pending')
+    /*
+     * A job Google told us to come back for is invisible until it is time.
+     * Without this the pass would re-offer a rate-limited job immediately, spend
+     * a call to be refused again, and burn the attempt budget in one invocation
+     * — which is the exact failure a back-off exists to prevent.
+     */
+    .or(`psi_retry_after.is.null,psi_retry_after.lt."${new Date().toISOString()}"`)
     .order('audited_at', { ascending: true })
     .limit(limit)
 
@@ -191,16 +231,68 @@ export async function claimPerformanceWork(limit: number): Promise<PerformanceJo
     .update({ psi_state: 'running', psi_checked_at: new Date().toISOString() })
     .in('id', ids)
     .eq('psi_state', 'pending')
-    .select('id, final_url, website_url')
+    .select('id, final_url, website_url, psi_attempts')
 
   if (error) {
     console.error('[enrichment] could not claim PageSpeed work', error.message)
     return []
   }
 
-  return ((data ?? []) as { id: string; final_url: string | null; website_url: string | null }[])
-    .map((row) => ({ auditId: row.id, url: row.final_url ?? row.website_url ?? '' }))
+  return ((data ?? []) as {
+    id: string
+    final_url: string | null
+    website_url: string | null
+    psi_attempts: number | null
+  }[])
+    .map((row) => ({
+      auditId: row.id,
+      url: row.final_url ?? row.website_url ?? '',
+      attempts: row.psi_attempts ?? 0,
+    }))
     .filter((job) => job.url)
+}
+
+/**
+ * How long to wait before asking PageSpeed about this audit again.
+ *
+ * Doubling, from a minute, with a ceiling. A rate limit on the shared per-IP
+ * quota clears in seconds to minutes; one on a keyed quota is a daily budget and
+ * clears in hours. The ceiling is what stops the second case turning into a
+ * retry every minute for the rest of the day.
+ *
+ * No jitter, deliberately. Jitter exists to stop a fleet of clients
+ * synchronising, and there is exactly one of these.
+ */
+function backoffMs(attempts: number): number {
+  return Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 30 * 60_000)
+}
+
+/**
+ * Past this, a refusal stops being temporary.
+ *
+ * Four attempts spans roughly a quarter of an hour of back-off. Something still
+ * refusing after that is not a passing limit, and the audit is entitled to say
+ * so rather than sit `pending` for ever with the library counting it as work
+ * outstanding.
+ */
+const MAX_PSI_ATTEMPTS = 4
+
+/**
+ * Put back jobs that were claimed and then not attempted.
+ *
+ * Distinct from the stale sweep below: nothing was asked of Google, so no
+ * attempt is spent and no back-off is written. The rate-limit breaker is the
+ * only caller — it stops a pass mid-batch, and the jobs it stopped are owed
+ * straight back to the queue rather than left to time out.
+ */
+export async function releasePerformance(auditIds: string[]): Promise<void> {
+  if (!auditIds.length) return
+
+  await createServiceClient()
+    .from('lead_audits')
+    .update({ psi_state: 'pending' })
+    .in('id', auditIds)
+    .eq('psi_state', 'running')
 }
 
 /** Put back any PageSpeed job an invocation died holding. */
@@ -214,24 +306,53 @@ export async function reclaimStalePerformance(staleMinutes: number): Promise<voi
     .lt('psi_checked_at', cutoff)
 }
 
-export async function recordPerformance(auditId: string, psi: PageSpeed, findings: Finding[]) {
+/**
+ * Write what PageSpeed said, or arrange to ask again.
+ *
+ * `attempts` is what the job was claimed with, so a retryable refusal on the
+ * first attempt waits a minute, on the second two, and so on — and past
+ * `MAX_PSI_ATTEMPTS` it becomes an ordinary failure with the last reason on it.
+ *
+ * The retry path deliberately writes NO findings and leaves the score columns
+ * alone. The audit is not finished; saying it scored nothing would be a
+ * judgement, and the whole reason for the retry is that no judgement was reached.
+ */
+export async function recordPerformance(
+  auditId: string,
+  psi: PageSpeed,
+  findings: Finding[],
+  attempts = MAX_PSI_ATTEMPTS,
+) {
   const supabase = createServiceClient()
 
-  const { error } = await supabase
-    .from('lead_audits')
-    .update({
-      psi_state: psi.state,
-      psi_performance: psi.performance,
-      psi_lcp_ms: psi.lcpMs,
-      psi_cls: psi.cls,
-      psi_error: psi.error,
-      psi_checked_at: psi.fetchedAt,
-    })
-    .eq('id', auditId)
+  const retrying = psi.retryable && attempts < MAX_PSI_ATTEMPTS
 
+  const patch: Record<string, unknown> = retrying
+    ? {
+        psi_state: 'pending',
+        psi_attempts: attempts + 1,
+        psi_retry_after: new Date(Date.now() + backoffMs(attempts + 1)).toISOString(),
+        psi_error: psi.error,
+        psi_checked_at: psi.fetchedAt,
+      }
+    : {
+        psi_state: psi.state,
+        psi_attempts: attempts + 1,
+        psi_retry_after: null,
+        psi_performance: psi.performance,
+        psi_lcp_ms: psi.lcpMs,
+        psi_cls: psi.cls,
+        psi_error:
+          psi.retryable && psi.error
+            ? `${psi.error} Gave up after ${attempts + 1} attempts.`
+            : psi.error,
+        psi_checked_at: psi.fetchedAt,
+      }
+
+  const { error } = await supabase.from('lead_audits').update(patch).eq('id', auditId)
   if (error) throw new Error(error.message)
 
-  await writeFindings(auditId, findings)
+  if (!retrying) await writeFindings(auditId, findings)
 }
 
 /** How many PageSpeed jobs are still outstanding. Feeds the "auditing N" note. */

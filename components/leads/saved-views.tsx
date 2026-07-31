@@ -6,7 +6,7 @@ import { IconCheck, IconMark, IconMore } from '@/components/icons'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
 import { activeFilterCount, sameFilters, toSearchParams } from '@/lib/leads/filters'
-import type { LeadFilters, SavedView } from '@/lib/leads/types'
+import { LIMITS, type LeadFilters, type SavedView } from '@/lib/leads/types'
 
 /*
  * Saved views — the filter set with a name on it.
@@ -108,7 +108,12 @@ export function SavedViews({
                   body: JSON.stringify({ used: true }),
                 })
               }}
-              className={`label border-b px-2 py-1 transition-colors ${
+              // A view name is capped at 60 characters server-side, and 60
+              // characters of uppercase `label` is most of this bar. Bounded
+              // here so a long name shortens its own chip rather than pushing
+              // every other view off the row.
+              title={view.name}
+              className={`label max-w-[12rem] truncate border-b px-2 py-1 transition-colors ${
                 isActive
                   ? 'border-signal text-ink'
                   : 'border-transparent text-ink-faint hover:text-ink-dim'
@@ -125,7 +130,11 @@ export function SavedViews({
             >
               {(close) => (
                 <>
-                  <MenuLabel>{view.name}</MenuLabel>
+                  <MenuLabel>
+                    <span className="block truncate" title={view.name}>
+                      {view.name}
+                    </span>
+                  </MenuLabel>
                   <MenuItem
                     disabled={busy}
                     onClick={async () => {
@@ -167,6 +176,9 @@ export function SavedViews({
               type="text"
               value={name}
               autoFocus
+              // The route refuses past this. Stopping the keystroke is kinder
+              // than taking the name and throwing it back.
+              maxLength={LIMITS.name}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {

@@ -17,5 +17,11 @@ export const dynamic = 'force-dynamic'
 
 export default async function OutreachPage() {
   const { due, cold } = await readOutreach()
-  return <OutreachConsole due={due} cold={cold} />
+  return (
+    <>
+      {/* Not drawn, for the reason the library's is not. See that page. */}
+      <h1 className="sr-only">Outreach — who is due and who has gone cold</h1>
+      <OutreachConsole due={due} cold={cold} />
+    </>
+  )
 }

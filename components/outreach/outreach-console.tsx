@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { IconAlert, IconClose, IconSearch } from '@/components/icons'
+import { ChangeMarks } from '@/components/leads/change-marks'
+import { ExportCsv } from '@/components/leads/export-csv'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { CommandButton, CommandLink } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
@@ -16,6 +18,7 @@ import { patchLead, type LeadPatch } from '@/lib/leads/patch'
 import {
   COLD_SCORE_FLOOR,
   LEAD_STATUSES,
+  LIMITS,
   type LeadRow,
   type LeadStatus,
   type OutreachQueues,
@@ -229,15 +232,18 @@ export function OutreachConsole({ due, cold }: OutreachQueues) {
       </div>
 
       {notice ? (
-        <div className="border-b border-rule bg-panel px-3 py-1.5">
+        <div role="status" className="border-b border-rule bg-panel px-3 py-1.5">
           <span className="text-sm text-ink-dim">{notice}</span>
         </div>
       ) : null}
 
       {error ? (
-        <div className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2">
+        <div
+          role="alert"
+          className="flex items-start gap-2 border-b border-rule border-l border-l-alert bg-panel px-3 py-2"
+        >
           <IconAlert className="mt-0.5 size-3.5 shrink-0 text-alert" />
-          <p className="text-sm text-ink-dim">{error}</p>
+          <p className="text-sm wrap-anywhere text-ink-dim">{error}</p>
         </div>
       ) : null}
 
@@ -249,12 +255,25 @@ export function OutreachConsole({ due, cold }: OutreachQueues) {
                 {section.title} — {section.listing.total.toLocaleString('de-DE')}
               </h2>
               <p className="text-sm text-ink-faint">{section.note}</p>
-              <Link
-                href={section.href}
-                className="label ml-auto text-ink-faint transition-colors hover:text-signal"
-              >
-                Open in the book
-              </Link>
+              <span className="ml-auto flex items-center gap-3">
+                <Link
+                  href={section.href}
+                  className="label text-ink-faint transition-colors hover:text-signal"
+                >
+                  Open in the book
+                </Link>
+                {/*
+                  The queue as a file. `queue=` rather than the filter set,
+                  because these two questions are defined in one place — see
+                  dueFilters and coldFilters — and having the export restate
+                  them is how the file and the screen come to disagree.
+
+                  The count is the queue's total, not the page's: the export is
+                  the whole queue, including the rows the one-page cap below is
+                  hiding.
+                */}
+                <ExportCsv query={`queue=${section.key}`} count={section.listing.total} />
+              </span>
             </div>
 
             {section.rows.length === 0 ? (
@@ -360,6 +379,13 @@ function QueueRow({
           {lead.name}
         </Link>
 
+        {/*
+          A queue row earns these more than a library row does. He is about to
+          phone this business, and "they built a website last month" is the one
+          fact that changes what he says when they pick up.
+        */}
+        <ChangeMarks codes={lead.changeFlags} at={lead.changedAt} />
+
         <span className={`label ${edit?.status ? 'text-signal' : 'text-ink-dim'}`}>{status}</span>
 
         {lead.website ? (
@@ -457,6 +483,7 @@ function QueueRow({
               type="text"
               value={edit?.note ?? ''}
               disabled={busy}
+              maxLength={LIMITS.note}
               placeholder="Note — saved with the above, as one entry"
               aria-label={`Note on ${lead.name}`}
               onChange={(event) => onStage({ note: event.target.value })}

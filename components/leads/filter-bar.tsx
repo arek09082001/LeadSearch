@@ -5,12 +5,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { IconClose, IconFilter, IconSearch } from '@/components/icons'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuCheck, MenuItem, MenuLabel } from '@/components/ui/controls'
+import { CHANGE_FILTERS } from '@/lib/leads/changes'
 import { activeFilterCount } from '@/lib/leads/filters'
 import { formatPlaceType } from '@/lib/places-types'
 import {
   AUDIT_FILTERS,
   FOLLOW_UP_FILTERS,
   type AuditFilter,
+  type ChangeFilter,
   type FollowUpFilter,
   type LeadFacets,
   type LeadFilters,
@@ -42,6 +44,7 @@ function FacetMenu({
   selected,
   onToggle,
   format = (value: string) => value,
+  footer,
 }: {
   label: string
   /** `count` is omitted where a facet has no cheap count — never faked as 0. */
@@ -49,6 +52,8 @@ function FacetMenu({
   selected: string[]
   onToggle: (value: string) => void
   format?: (value: string) => string
+  /** An action that belongs with this facet rather than with the filter bar. */
+  footer?: React.ReactNode
 }) {
   const [needle, setNeedle] = useState('')
 
@@ -90,6 +95,7 @@ function FacetMenu({
               />
             ))
           )}
+          {footer}
         </>
       )}
     </Menu>
@@ -182,12 +188,58 @@ export function FilterBar({
         format={formatPlaceType}
       />
 
+      {/*
+        The bar reads in two halves and now says so.
+
+        Left of this rule: what a lead IS — its status, its filing, where it is,
+        what trade. Right of it: what was FOUND about it — the audit's faults,
+        what has changed since it was saved, when to call, how it ranks. Eight
+        identical menus in an undifferentiated row is a bar the operator scans
+        linearly every time; one hairline turns it into two short lists, and the
+        divider is the same idiom the masthead and the selection bar already use
+        for exactly this.
+      */}
+      <span aria-hidden="true" className="hidden h-4 w-px shrink-0 bg-rule-strong lg:block" />
+
       <FacetMenu
         label="Audit"
         options={AUDIT_FILTERS.map((entry) => ({ value: entry.key }))}
         selected={filters.audit}
         onToggle={(value) => onChange({ audit: toggle(filters.audit, value as AuditFilter) })}
         format={(key) => AUDIT_FILTERS.find((entry) => entry.key === key)?.label ?? key}
+      />
+
+      {/*
+        What the refresh found. Kept beside Audit and not merged into it: one
+        asks what is wrong with a website, the other asks what has happened to a
+        business, and "show me everyone who has built a site since I saved them"
+        is a different question from any fault.
+      */}
+      <FacetMenu
+        label="Changed"
+        options={CHANGE_FILTERS.map((entry) => ({ value: entry.key }))}
+        selected={filters.change}
+        onToggle={(value) => onChange({ change: toggle(filters.change, value as ChangeFilter) })}
+        format={(key) => CHANGE_FILTERS.find((entry) => entry.key === key)?.label ?? key}
+        footer={
+          /*
+           * The one sort with no column to click.
+           *
+           * "Most recently changed" is the natural question once the nightly
+           * refresh has been running for a month, and the table has no Changed
+           * column to head — the marks live beside the business name, in a
+           * column that already sorts by name. A sort key reachable only by
+           * hand-editing the URL is drift; this is where it belongs, next to
+           * the filter that asks the same question.
+           */
+          <button
+            type="button"
+            onClick={() => onChange({ sort: 'changed', desc: true })}
+            className="flex w-full items-center gap-2 border-t border-rule px-2.5 py-1.5 text-left text-sm text-ink-dim transition-colors hover:bg-raise hover:text-ink"
+          >
+            Sort by most recently changed
+          </button>
+        }
       />
 
       <Menu
@@ -290,6 +342,7 @@ export function FilterBar({
               scoreMin: null,
               scoreMax: null,
               audit: [],
+              change: [],
               followUp: null,
             })
           }

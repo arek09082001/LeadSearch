@@ -2,10 +2,10 @@
 
 import { useState } from 'react'
 
-import { IconClose, IconRefresh, IconStrike, IconUndo } from '@/components/icons'
+import { IconClose, IconRefresh, IconStrike, IconSync, IconUndo } from '@/components/icons'
 import { CommandButton } from '@/components/ui/command-button'
 import { INPUT, Menu, MenuItem, MenuLabel } from '@/components/ui/controls'
-import { LEAD_STATUSES, type BulkAction, type LeadStatus } from '@/lib/leads/types'
+import { LEAD_STATUSES, LIMITS, type BulkAction, type LeadStatus } from '@/lib/leads/types'
 
 /*
  * What a selection can be turned into.
@@ -122,6 +122,7 @@ export function BulkBar({
                   <input
                     type="text"
                     value={newListName}
+                    maxLength={LIMITS.name}
                     onChange={(event) => setNewListName(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter' || !newListName.trim()) return
@@ -183,6 +184,31 @@ export function BulkBar({
           >
             <IconRefresh className="size-3.5" />
             Re-audit
+          </CommandButton>
+
+          {/*
+            The only control in this bar that spends money, so it is the only
+            one that says so before it runs. Everything else here writes a row;
+            this asks Google about every lead in the selection, one billable
+            request each — and the confirm is not ceremony, it is the difference
+            between a click and an invoice.
+          */}
+          <CommandButton
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              const asked = window.confirm(
+                `Ask Google what has changed about ${count} ${count === 1 ? 'lead' : 'leads'}?\n\n` +
+                  'That is one billable Place Details request each, against this ' +
+                  'month’s ceiling. Anything that has built a website since you ' +
+                  'saved it will be re-audited and re-scored.',
+              )
+              if (asked) onAction({ action: 'refresh' })
+            }}
+            title="Ask Google for current details — one billable request per lead"
+          >
+            <IconSync className="size-3.5" />
+            Refresh from Google
           </CommandButton>
 
           <CommandButton

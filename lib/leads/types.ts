@@ -1,10 +1,11 @@
+import { CHANGE_CODES, type ChangeCode } from '@/lib/leads/changes'
 import {
   FINDING_CODES,
   FINDING_SPECS,
   type FindingCode,
   type FindingSeverity,
 } from '@/lib/enrichment/vocabulary'
-import type { StoredScore } from '@/lib/scoring/score'
+import type { ScoreMovement, StoredScore } from '@/lib/scoring/score'
 
 /*
  * The library's vocabulary, in one place that both halves may import.
@@ -79,6 +80,21 @@ export const AUDIT_FILTERS = [
 
 export type AuditFilter = FindingCode | typeof NEVER_AUDITED
 
+/**
+ * The change filters: one per code the refresh pass can report.
+ *
+ * Derived from the change vocabulary for the same reason the audit filters are
+ * derived from the finding vocabulary — a new code is filterable the moment it
+ * exists, and the menu cannot drift from what the pass writes.
+ *
+ * There is deliberately no "nothing changed" entry to mirror `never_audited`.
+ * That is the steady state of the whole book, and a filter for it would return
+ * everything.
+ */
+export type ChangeFilter = ChangeCode
+
+export const CHANGE_FILTER_KEYS: readonly ChangeCode[] = CHANGE_CODES
+
 export const FOLLOW_UP_FILTERS = [
   // Overdue and today as one question, because that is the one the Outreach
   // queue asks: a follow-up that has arrived is due whether it arrived this
@@ -101,6 +117,7 @@ export const LEAD_SORTS = [
   { key: 'status', label: 'Status' },
   { key: 'follow_up', label: 'Follow-up' },
   { key: 'audited', label: 'Audited' },
+  { key: 'changed', label: 'Changed' },
 ] as const
 
 export type LeadSort = (typeof LEAD_SORTS)[number]['key']
@@ -121,6 +138,8 @@ export interface LeadFilters {
   scoreMin: number | null
   scoreMax: number | null
   audit: AuditFilter[]
+  /** What the refresh pass last found. Empty means "don't care", never "nothing changed". */
+  change: ChangeFilter[]
   followUp: FollowUpFilter | null
   sort: LeadSort
   desc: boolean
@@ -138,6 +157,7 @@ export const DEFAULT_FILTERS: LeadFilters = {
   scoreMin: null,
   scoreMax: null,
   audit: [],
+  change: [],
   followUp: null,
   // The operator's stated default: highest score first.
   sort: 'score',
@@ -147,6 +167,24 @@ export const DEFAULT_FILTERS: LeadFilters = {
 }
 
 export const PAGE_SIZE = 100
+
+/**
+ * The library's own limits, in one place both halves may read.
+ *
+ * Every one of these is enforced on the server, because a client-side cap is a
+ * courtesy and not a constraint. They are stated here so the field that takes
+ * the input can carry the same number the route rejects at — a textarea that
+ * lets him type four thousand characters and then throws them away on save is
+ * worse than one that stops him at two.
+ */
+export const LIMITS = {
+  /** A note. Long enough for what happened on a call, short enough to read back. */
+  note: 2000,
+  /** A list name, and a saved view's. Both are read in a one-line bar. */
+  name: 60,
+  /** The furthest page the pager will address. Past the end of any real book. */
+  page: 10_000,
+} as const
 
 /** One row of the library, flattened for the table. */
 export interface LeadRow {
@@ -205,6 +243,20 @@ export interface LeadRow {
    * Holds the single synthetic `never_audited` when there is no audit at all.
    */
   auditFlags: string[]
+
+  /**
+   * What the refresh pass last found had changed about this business.
+   *
+   * Rendered through the change vocabulary, exactly as `auditFlags` is rendered
+   * through the finding vocabulary. Empty is the steady state. It holds the LAST
+   * change rather than every change ever, and `changedAt` says when — so a mark
+   * that has been on a row for two months is still telling the truth.
+   */
+  changeFlags: string[]
+  /** When those changes were found. Null when nothing has ever changed. */
+  changedAt: string | null
+  /** Why the last Google re-pull failed. About the request, never the business. */
+  refreshError: string | null
 
   lists: { id: string; name: string }[]
   noteCount: number
@@ -313,6 +365,8 @@ export type BulkAction =
   | { action: 'delete' }
   | { action: 'restore' }
   | { action: 're_audit' }
+  /** Ask Google what has changed. The one bulk action that spends money. */
+  | { action: 'refresh' }
 
 export interface BulkResult {
   affected: number
@@ -407,16 +461,24 @@ export interface AuditSummary {
  * table a line came from; nothing above this type has to care.
  */
 export interface TimelineEntry {
-  /** Namespaced across both tables: `note:<uuid>` or `activity:<bigint>`. */
+  /** Namespaced across the tables: `note:<uuid>`, `activity:<bigint>`, `refresh:<uuid>`. */
   id: string
-  kind: 'note' | 'activity'
-  /** The activity's type. Null on notes, which are not an activity type. */
+  kind: 'note' | 'activity' | 'refresh'
+  /** The activity's type. Null on notes and refreshes, which are not activity types. */
   type: ActivityType | null
   at: string
-  /** The note's text, or an activity's summary. Null when it has neither. */
+  /** The note's text, an activity's summary, or the sentence describing a change. */
   body: string | null
   statusBefore: LeadStatus | null
   statusAfter: LeadStatus | null
+  /**
+   * Change codes, on refresh entries only.
+   *
+   * Carried as codes rather than baked into `body` so the timeline renders them
+   * through the same vocabulary the table's marks come from — the history and
+   * the row cannot disagree about what happened.
+   */
+  changes?: string[]
 }
 
 export interface LeadDetail {
@@ -434,7 +496,17 @@ export interface LeadDetail {
    * breakdown inside says which.
    */
   score: StoredScore | null
-  /** Status changes and notes as one sequence, newest first. */
+  /**
+   * How the score moved, and which faults moved it.
+   *
+   * The lead that finally built a website is the case this exists for: its
+   * score falls by sixty points, and a number that fell sixty points without
+   * saying why is a number the operator stops believing. Null when there is
+   * nothing to compare against — the first score of a lead's life has not
+   * moved.
+   */
+  movement: ScoreMovement | null
+  /** Status changes, notes and Google changes as one sequence, newest first. */
   timeline: TimelineEntry[]
 }
 

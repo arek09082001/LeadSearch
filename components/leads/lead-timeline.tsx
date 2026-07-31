@@ -1,21 +1,24 @@
+import { ChangeMarks } from '@/components/leads/change-marks'
 import { fullDate } from '@/lib/leads/dates'
 import type { TimelineEntry } from '@/lib/leads/types'
 
 /*
  * What has happened to this lead, in the order it happened.
  *
- * The database keeps two records — a trigger appends every status transition to
- * `lead_activities`, and notes are prose in `lead_notes` — and the operator
- * kept neither. He worked the lead once, in one order. Two lists side by side
- * would make him do the interleaving in his head every time he came back cold,
- * which is exactly the work PRODUCT.md's fourth principle says this page owes
- * him instead.
+ * The database keeps three records — a trigger appends every status transition
+ * to `lead_activities`, notes are prose in `lead_notes`, and the refresh pass
+ * writes what Google changed to `lead_refreshes` — and the operator kept none of
+ * them. He worked the lead once, in one order, and the world moved under it
+ * while he did. Three lists side by side would make him do the interleaving in
+ * his head every time he came back cold, which is exactly the work PRODUCT.md's
+ * fourth principle says this page owes him instead.
  *
  * So: one column, newest first, with the kind of line carried by what it says
  * rather than by an icon or a rail. A transition is two statuses and an arrow —
  * terse, because it was written by machinery. A note is his own sentence at
  * full width and full ink, because it is the only thing here anybody thought
- * about.
+ * about. A change is its marks and then the numbers either side of it, because
+ * "reviews 94 → 128" is the whole content of that line.
  *
  * No spine, no dots, no cards. A history on a dealing screen is a ruled list
  * with a timestamp column, and the timestamps line up because they are `data`.
@@ -51,17 +54,38 @@ function Line({ entry }: { entry: TimelineEntry }) {
             </span>
             <span className="label text-ink">{entry.statusAfter}</span>
           </span>
+        ) : entry.kind === 'refresh' ? (
+          <span className="flex flex-wrap items-baseline gap-2">
+            {entry.changes?.length ? (
+              <ChangeMarks codes={entry.changes} at={null} variant="full" />
+            ) : (
+              // A refresh row with no codes is a failed one. It is still
+              // history — it says the snapshot beside it is older than its
+              // date suggests — and the sentence beneath says why.
+              <span className="label text-ink-faint">Refresh failed</span>
+            )}
+            {entry.body ? <span className="text-sm text-ink-dim">{entry.body}</span> : null}
+          </span>
         ) : entry.kind === 'activity' ? (
           <span className="flex flex-wrap items-baseline gap-2">
             <span className="label text-ink-dim">
               {ACTIVITY_LABEL[entry.type ?? 'other'] ?? entry.type}
             </span>
-            {entry.body ? <span className="text-sm text-ink-dim">{entry.body}</span> : null}
+            {entry.body ? (
+              <span className="min-w-0 text-sm wrap-anywhere text-ink-dim">{entry.body}</span>
+            ) : null}
           </span>
         ) : (
-          // His own words, kept as typed: a note with line breaks in it was
-          // written with line breaks in it.
-          <p className="max-w-[70ch] text-sm whitespace-pre-wrap text-ink">{entry.body}</p>
+          /*
+            His own words, kept as typed: a note with line breaks in it was
+            written with line breaks in it. `wrap-anywhere` because a measured
+            column is only measured until somebody pastes a URL — an
+            unbreakable 300-character string would otherwise widen this column
+            and every timestamp beside it.
+          */
+          <p className="max-w-[70ch] text-sm whitespace-pre-wrap wrap-anywhere text-ink">
+            {entry.body}
+          </p>
         )}
       </div>
     </li>
@@ -83,9 +107,10 @@ export function LeadTimeline({ entries }: { entries: TimelineEntry[] }) {
         </ul>
       ) : (
         <p className="max-w-[52ch] border-b border-rule px-3 py-4 text-sm text-ink-dim">
-          Nothing recorded yet. Every status change writes itself here, and a note you
-          save with one sits alongside it — so this stays the whole account of what you
-          did with this lead.
+          Nothing recorded yet. Every status change writes itself here, a note you save
+          with one sits alongside it, and anything Google changes about this business
+          lands here too — so this stays the whole account of the lead, not just of what
+          you did to it.
         </p>
       )}
     </>

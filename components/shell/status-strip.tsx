@@ -35,7 +35,14 @@ export function StatusStrip({
   const meta = PROVENANCE[provenance]
 
   return (
-    <div className="flex items-center gap-2 border-b border-rule bg-panel px-2 py-1.5 md:gap-3 md:px-3">
+    /*
+      Wraps rather than overflows. A surface can put two controls in the slot on
+      the right — the lead's page has Refresh and Re-audit — and at 360px a
+      shrink-0 row holding those plus the provenance and a date runs off the
+      edge. Wrapping costs a second line on a phone, which is the width where
+      this product is a reference rather than an instrument.
+    */
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-rule bg-panel px-2 py-1.5 md:gap-x-3 md:px-3">
       <span className="flex shrink-0 items-center gap-1.5">
         <span aria-hidden="true" className={`size-1.5 ${meta.dot}`} />
         <span className="label text-ink-dim">{meta.label}</span>

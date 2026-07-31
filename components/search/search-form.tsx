@@ -114,6 +114,9 @@ export function SearchForm({
             ref={queryRef}
             type="text"
             value={query}
+            // The route refuses longer. Same reason as everywhere else: a field
+            // that takes the text and then throws it back has wasted the typing.
+            maxLength={200}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Zahnarzt"
             autoComplete="off"
@@ -126,6 +129,7 @@ export function SearchForm({
           <input
             type="text"
             value={location}
+            maxLength={200}
             onChange={(event) => setLocation(event.target.value)}
             placeholder="Heilbronn"
             autoComplete="off"

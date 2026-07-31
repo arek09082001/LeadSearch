@@ -1,14 +1,17 @@
 import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
+import { ChangeMarks } from '@/components/leads/change-marks'
 import { LeadActions } from '@/components/leads/lead-actions'
 import { LeadTimeline } from '@/components/leads/lead-timeline'
 import { ReAudit } from '@/components/leads/re-audit'
+import { RefreshLead } from '@/components/leads/refresh-lead'
 import { ScoreBreakdown } from '@/components/leads/score-breakdown'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { StatusStrip } from '@/components/shell/status-strip'
+import { CHANGE_SPECS, isChangeCode, sortChanges } from '@/lib/leads/changes'
 import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
-import { fullDate, dueLabel, shortDate } from '@/lib/leads/dates'
+import { ago, fullDate, dueLabel, shortDate } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
 import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
 
@@ -210,8 +213,62 @@ function Measurements({ audit }: { audit: LeadAudit }) {
  * The page
  * ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- *
+ * What has changed under him
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The last thing Google changed its mind about, said in full.
+ *
+ * Directly under the header, above the diagnosis, because it can invalidate the
+ * diagnosis. A lead that has built a website since it was saved is still
+ * carrying an audit that says it has none, and the operator has to know that
+ * before he reads a word of the fault list — not after, from a mark in a
+ * history at the bottom of the page.
+ *
+ * Sticky rather than dismissable: it shows the LAST change with the date it was
+ * found, so it stays true whether that was yesterday or in May, and there is
+ * nothing to acknowledge and no state to get wrong.
+ */
+function Changed({ lead }: { lead: LeadDetail['lead'] }) {
+  const codes = sortChanges(lead.changeFlags)
+  if (!codes.length) return null
+
+  return (
+    /*
+      A `live` rule, not the amber one.
+
+      DESIGN.md gives each signal colour exactly one meaning, and amber is the
+      operator's own decisions and his book — which is what the actions band
+      directly below this one carries. What this band holds is the opposite: it
+      is Google's, transient, and arrived without him. `live` is the token for
+      exactly that, and using it here also stops three amber-ruled bands from
+      stacking down the top of the page with nothing separating them.
+    */
+    <section
+      aria-label="What has changed"
+      className="border-b border-rule border-l border-l-live bg-panel px-3 py-2"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h2 className="label text-ink-dim">
+          Changed{lead.changedAt ? ` ${ago(lead.changedAt)}` : ''}
+        </h2>
+        <ChangeMarks codes={lead.changeFlags} at={lead.changedAt} variant="full" />
+      </div>
+
+      <ul className="mt-1 max-w-[70ch]">
+        {codes.map((code) => (
+          <li key={code} className="text-sm text-ink-dim">
+            {CHANGE_SPECS[code].label}.
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history, score, timeline } = detail
+  const { lead, audit, history, score, movement, timeline } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -219,9 +276,23 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
   const auditing = lead.enrichmentState === 'queued' || lead.enrichmentState === 'running'
   const profiling = audit?.psiState === 'pending' || audit?.psiState === 'running'
 
+  /*
+   * The audit predates the last thing that changed about the site itself.
+   *
+   * The refresh queues a re-audit the moment it finds this, so the window is
+   * usually seconds — but "usually" is not what the operator is holding when he
+   * reads a fault list aloud, and an audit that describes a website the business
+   * no longer has is the one failure this page must never make quietly.
+   */
+  const auditIsStale =
+    lead.changedAt !== null &&
+    lead.changeFlags.some((code) => isChangeCode(code) && CHANGE_SPECS[code].invalidatesAudit) &&
+    (lead.lastAuditedAt === null || lead.lastAuditedAt < lead.changedAt)
+
   return (
     <>
       <StatusStrip provenance="book" detail={`Google data ${shortDate(lead.fetchedAt)}`}>
+        <RefreshLead leadId={lead.id} fetchedAt={lead.fetchedAt} />
         <ReAudit leadId={lead.id} pending={auditing || profiling} />
       </StatusStrip>
 
@@ -233,7 +304,14 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
           ← Book
         </Link>
 
-        <h1 className="mt-1 text-lg font-semibold text-ink">{lead.name}</h1>
+        {/*
+          `wrap-anywhere` rather than truncation. This is the one place the whole
+          name has to be readable — he is about to say it on the phone — and
+          German compounds run past any single line at any width worth having.
+          `break-words` alone leaves a 40-character unhyphenated compound
+          overflowing; this breaks inside the word when there is no other option.
+        */}
+        <h1 className="mt-1 text-lg font-semibold wrap-anywhere text-ink">{lead.name}</h1>
 
         <div className="mt-1 flex flex-wrap items-baseline gap-x-4 gap-y-1 font-data text-micro text-ink-faint">
           <span className="label text-ink-dim">{lead.status}</span>
@@ -263,6 +341,20 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
         </div>
       </header>
 
+      <Changed lead={lead} />
+
+      {/*
+        Google refused, and the header above is therefore older than its date
+        implies. Said on the lead rather than only in a log, because the number
+        he is about to dial is one of the fields that did not get refreshed.
+      */}
+      {lead.refreshError ? (
+        <p className="border-b border-rule px-3 py-2 text-sm text-ink-faint">
+          The last refresh could not reach Google. {lead.refreshError} The details above are
+          still from {shortDate(lead.fetchedAt)}.
+        </p>
+      ) : null}
+
       <LeadActions lead={lead} />
 
       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem]">
@@ -284,6 +376,21 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
                   ? `Diagnosis — ${faults.length} ${faults.length === 1 ? 'fault' : 'faults'}`
                   : 'Diagnosis'}
               </h2>
+
+              {/*
+                The one thing this page must never do quietly: present a fault
+                list about a website the business no longer has, or no longer
+                has in that form. The refresh re-queues the audit the moment it
+                finds this, so the window is short — but he could be reading
+                this out loud inside it.
+              */}
+              {auditIsStale ? (
+                <p className="border-b border-rule border-l border-l-signal bg-panel px-3 py-2 text-sm text-ink">
+                  This audit is older than the change above — it was run on{' '}
+                  {shortDate(audit.auditedAt)} and describes the site as it was then.
+                  {auditing ? ' A new one is running.' : ' Re-audit before using it.'}
+                </p>
+              ) : null}
 
               {faults.length ? (
                 <ul>
@@ -345,7 +452,7 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
             a call", and the faults to its left are the argument for it — so the
             two read as one thing, and neither is buried under the notebook.
           */}
-          <ScoreBreakdown score={score} />
+          <ScoreBreakdown score={score} movement={movement} />
 
           {audit ? (
             <>

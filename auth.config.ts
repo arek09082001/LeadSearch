@@ -27,6 +27,19 @@ export const authConfig = {
         return true
       }
 
+      /*
+       * The scheduler is let past, and only the scheduler's own prefix is.
+       *
+       * A cron trigger has no browser and therefore no cookie, so a session
+       * gate would turn every nightly run into a redirect to /login. Its
+       * credential is a bearer secret checked inside the route — see
+       * `requireSchedule` in lib/api/guard.ts, which refuses when the secret is
+       * unset rather than falling open. This is the one place in the product
+       * where the proxy is not the outer lock, which is why the prefix is
+       * matched exactly rather than by a pattern that could widen.
+       */
+      if (pathname.startsWith('/api/cron/')) return true
+
       // Everything else is the operator's own instrument.
       return signedIn
     },

@@ -142,4 +142,21 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+
+  /*
+    The tick is the one animation here with meaning in it rather than polish,
+    and it is deliberately left to die under this rule.
+
+    A reduced-motion alternative is supposed to keep the state change and drop
+    the movement. This one has no motionless form. `tick` fires on mount for
+    every row, so what it encodes is not "this row is special" but "this row
+    arrived just now" — a fact about time, not about the row. Any static mark
+    would still be on all sixty rows an hour later, which says something false
+    rather than something quieter.
+
+    What the flash contributes is carried in words elsewhere: the status strip
+    counts up as pages land and says "fetched just now", and the feed marks
+    "Fetching next page…" while another is in flight. Under reduced motion
+    those are the whole signal, and they are legible without it.
+  */
 }

@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# per-machine agent tooling settings — absolute paths, not shareable
+.claude/settings.local.json
+
 # debug
 npm-debug.log*
 yarn-debug.log*

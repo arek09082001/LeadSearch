@@ -44,5 +44,11 @@ export default async function SearchPage() {
     )
   }
 
-  return <SearchConsole initialBudget={budget.value} />
+  return (
+    <>
+      {/* Not drawn, for the reason the library's is not. See that page. */}
+      <h1 className="sr-only">Search — transient results from Google Places</h1>
+      <SearchConsole initialBudget={budget.value} />
+    </>
+  )
 }

@@ -1,9 +1,12 @@
 import 'server-only'
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { isChangeCode } from '@/lib/leads/changes'
 import { today } from '@/lib/leads/dates'
 import { coldFilters, dueFilters } from '@/lib/leads/filters'
+import { describeDelta, type Snapshot } from '@/lib/refresh/diff'
 import {
+  LIMITS,
   PAGE_SIZE,
   type ActivityType,
   type AuditFinding,
@@ -26,8 +29,11 @@ import {
   type TimelineEntry,
   type WebsiteStatus,
 } from '@/lib/leads/types'
+import { queueEnrichment } from '@/lib/enrichment/store'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
-import { readCurrentScore } from '@/lib/scoring/store'
+import { runRefresh } from '@/lib/refresh/run'
+import { compareScores } from '@/lib/scoring/score'
+import { readCurrentScore, readPreviousScore } from '@/lib/scoring/store'
 
 /*
  * Everything the permanent side reads and writes.
@@ -37,6 +43,16 @@ import { readCurrentScore } from '@/lib/scoring/store'
  * code: discovery may only ever *read* `leads`, and a row appears here because
  * saveLeads() was called by a route the operator deliberately hit.
  */
+
+/**
+ * The enrichment queue's door, re-exported.
+ *
+ * It lives in lib/enrichment/store.ts — saving, the bulk re-audit and the
+ * refresh pass all need it, and having the refresh pass reach into this module
+ * for it made the two import each other. Kept exported here so the routes that
+ * already speak to this module did not have to learn a second one.
+ */
+export { queueEnrichment }
 
 /** The `leads_library` view, as it comes back over the wire. */
 interface LibraryRecord {
@@ -79,6 +95,9 @@ interface LibraryRecord {
   psi_lcp_ms: number | null
   psi_cls: number | string | null
   audit_flags: string[] | null
+  change_flags: string[] | null
+  changed_at: string | null
+  refresh_error: string | null
   list_ids: string[] | null
   note_count: number | null
 }
@@ -89,7 +108,7 @@ interface LibraryRecord {
  * splitting it across lines to be tidy collapses that inference to `string`.
  */
 const LIBRARY_COLUMNS =
-  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, list_ids, note_count'
+  'id, google_place_id, name, formatted_address, city, phone, website, rating, user_rating_count, primary_type, google_maps_uri, fetched_at, status, follow_up_at, saved_at, deleted_at, current_score, last_audited_at, enrichment_state, enrichment_error, website_status, dns_resolves, is_https, tls_valid, is_mobile_friendly, has_title, has_meta_description, has_favicon, is_table_layout, load_ms, copyright_year, platform, platform_version, presence_kind, psi_state, psi_performance, psi_lcp_ms, psi_cls, audit_flags, change_flags, changed_at, refresh_error, list_ids, note_count'
 
 function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
   return {
@@ -134,6 +153,9 @@ function toRow(record: LibraryRecord, listNames: Map<string, string>): LeadRow {
     // numeric(5,3) arrives as a string from PostgREST, like rating above.
     psiCls: record.psi_cls === null ? null : Number(record.psi_cls),
     auditFlags: record.audit_flags ?? [],
+    changeFlags: record.change_flags ?? [],
+    changedAt: record.changed_at,
+    refreshError: record.refresh_error,
     lists: (record.list_ids ?? [])
       .map((id) => ({ id, name: listNames.get(id) ?? 'Unknown list' }))
       .sort((a, b) => a.name.localeCompare(b.name, 'de')),
@@ -149,6 +171,7 @@ const SORT_COLUMNS: Record<LeadFilters['sort'], string> = {
   status: 'status',
   follow_up: 'follow_up_at',
   audited: 'last_audited_at',
+  changed: 'changed_at',
 }
 
 /* ------------------------------------------------------------------------- *
@@ -222,6 +245,13 @@ function applyFilters<T>(query: T, filters: LeadFilters): T {
    */
   if (filters.audit.length) result = result.overlaps('audit_flags', filters.audit)
 
+  /*
+   * The change filters, in the same one predicate and OR'd for the same reason.
+   * "Built a site, or their number changed" is a question; a site that did both
+   * at once is not.
+   */
+  if (filters.change.length) result = result.overlaps('change_flags', filters.change)
+
   switch (filters.followUp) {
     // A date that has arrived, whether this morning or a fortnight ago. Null
     // dates are excluded by the comparison itself, not by a second predicate.
@@ -288,25 +318,84 @@ export async function queryLeads(filters: LeadFilters): Promise<LeadListing> {
 }
 
 /**
+ * The whole filtered set, a page at a time.
+ *
+ * What the CSV export reads. A generator rather than an array for the reason
+ * the provider's search is a generator: the caller writes each page to the
+ * response as it arrives, so a four-thousand-row export never has four thousand
+ * rows in memory at once and the browser starts receiving the file immediately.
+ *
+ * Ordered by the same sort the page was drawn with, and by `id` last, which is
+ * what stops `range()` dropping and repeating rows between pages. `EXPORT_LIMIT`
+ * is a stated ceiling rather than a silent one — the route says so in the file
+ * when it bites.
+ */
+export const EXPORT_LIMIT = 20_000
+
+export async function* leadPages(
+  filters: LeadFilters,
+  pageSize = 500,
+  limit = EXPORT_LIMIT,
+): AsyncGenerator<LeadRow[], void, void> {
+  const supabase = createServiceClient()
+  const listNames = await readListNames()
+  const column = SORT_COLUMNS[filters.sort] ?? SORT_COLUMNS.score
+
+  for (let offset = 0; offset < limit; offset += pageSize) {
+    const size = Math.min(pageSize, limit - offset)
+
+    const { data, error } = await applyFilters(
+      supabase.from('leads_library').select(LIBRARY_COLUMNS),
+      filters,
+    )
+      .order(column, { ascending: !filters.desc, nullsFirst: false })
+      .order('saved_at', { ascending: false })
+      .order('id', { ascending: true })
+      .range(offset, offset + size - 1)
+
+    if (error) throw new Error(`Could not read the library: ${error.message}`)
+
+    const rows = ((data ?? []) as unknown as LibraryRecord[]).map((record) =>
+      toRow(record, listNames),
+    )
+    if (!rows.length) return
+
+    yield rows
+    if (rows.length < size) return
+  }
+}
+
+/**
  * Every id matching the filters, ignoring pagination.
  *
  * What "select all filtered" actually selects. Returned as ids rather than rows
  * because the only thing done with them is a bulk action, and shipping 4000
  * full rows to the browser to check 4000 boxes would be absurd.
  */
-export async function queryLeadIds(filters: LeadFilters, limit = 5000): Promise<string[]> {
+export const SELECT_ALL_LIMIT = 5000
+
+export async function queryLeadIds(
+  filters: LeadFilters,
+  limit = SELECT_ALL_LIMIT,
+): Promise<{ ids: string[]; truncated: boolean }> {
   const supabase = createServiceClient()
 
   // One query selecting one column, not the paged listing. Reading four
   // thousand full rows — audits, list arrays, note counts — to throw away
   // everything but the id would be forty round trips for a delete.
+  //
+  // One row past the limit is asked for, purely to find out whether there was
+  // one. A cap on a set that a DELETE is about to be applied to has to be
+  // detectable, not just applied.
   const { data, error } = await applyFilters(
     supabase.from('leads_library').select('id'),
     filters,
-  ).range(0, limit - 1)
+  ).range(0, limit)
 
   if (error) throw new Error(`Could not resolve the selection: ${error.message}`)
-  return ((data ?? []) as { id: string }[]).map((row) => row.id)
+
+  const rows = ((data ?? []) as { id: string }[]).map((row) => row.id)
+  return { ids: rows.slice(0, limit), truncated: rows.length > limit }
 }
 
 /**
@@ -350,58 +439,48 @@ async function countLibrary(): Promise<number> {
 export async function readFacets(): Promise<LeadFacets> {
   const supabase = createServiceClient()
 
-  const [places, listRows, memberships, deleted] = await Promise.all([
-    supabase
-      .from('leads')
-      .select('id, city, primary_type, status')
-      .is('deleted_at', null)
-      .limit(20000),
-    supabase.from('lists').select('id, name').order('name'),
-    supabase.from('lead_lists').select('list_id, lead_id').limit(20000),
+  /*
+   * Four reads, each returning about as many rows as the menu will draw.
+   *
+   * This used to fetch the whole library and group it here — twenty thousand
+   * lead rows and twenty thousand list memberships, over the wire, on every
+   * filter change, to render thirty menu entries. Every filter change in this
+   * surface is a navigation, so that was the cost of a click on the page the
+   * operator lives on, and past the fetch limit the counts quietly stopped
+   * being true with nothing saying so.
+   *
+   * The GROUP BY belongs where the rows are. See the facets migration.
+   */
+  const [values, statusRows, listRows, deleted] = await Promise.all([
+    supabase.from('lead_facet_values').select('kind, value, count'),
+    supabase.from('lead_status_counts').select('status, count'),
+    supabase.from('lead_list_counts').select('id, name, count').order('name'),
     supabase
       .from('leads')
       .select('id', { count: 'exact', head: true })
       .not('deleted_at', 'is', null),
   ])
 
-  const cities = new Map<string, number>()
-  const categories = new Map<string, number>()
-  const statuses = new Map<LeadStatus, number>()
-  const live = new Set<string>()
-
-  for (const place of (places.data ?? []) as {
-    id: string
-    city: string | null
-    primary_type: string | null
-    status: LeadStatus
-  }[]) {
-    live.add(place.id)
-    if (place.city) cities.set(place.city, (cities.get(place.city) ?? 0) + 1)
-    if (place.primary_type) {
-      categories.set(place.primary_type, (categories.get(place.primary_type) ?? 0) + 1)
-    }
-    statuses.set(place.status, (statuses.get(place.status) ?? 0) + 1)
-  }
-
-  // Counted against the live set rather than through an embedded join: a list
-  // holding forty deleted leads must not advertise forty.
-  const listCounts = new Map<string, number>()
-  for (const row of (memberships.data ?? []) as { list_id: string; lead_id: string }[]) {
-    if (!live.has(row.lead_id)) continue
-    listCounts.set(row.list_id, (listCounts.get(row.list_id) ?? 0) + 1)
-  }
-
   const byCount = <T extends { count: number }>(a: T, b: T) => b.count - a.count
 
+  // `count(*)` is bigint, and PostgREST sends bigint as a string to avoid
+  // losing precision in JSON. Every count below is therefore coerced.
+  const rows = (values.data ?? []) as { kind: string; value: string; count: number | string }[]
+  const of = (kind: string) =>
+    rows
+      .filter((row) => row.kind === kind)
+      .map((row) => ({ value: row.value, count: Number(row.count) }))
+      .sort(byCount)
+
   return {
-    cities: [...cities].map(([value, count]) => ({ value, count })).sort(byCount),
-    categories: [...categories].map(([value, count]) => ({ value, count })).sort(byCount),
-    lists: ((listRows.data ?? []) as { id: string; name: string }[]).map((list) => ({
-      id: list.id,
-      name: list.name,
-      count: listCounts.get(list.id) ?? 0,
-    })),
-    statuses: [...statuses].map(([value, count]) => ({ value, count })).sort(byCount),
+    cities: of('city'),
+    categories: of('category'),
+    lists: ((listRows.data ?? []) as { id: string; name: string; count: number | string }[]).map(
+      (list) => ({ id: list.id, name: list.name, count: Number(list.count) }),
+    ),
+    statuses: ((statusRows.data ?? []) as { status: LeadStatus; count: number | string }[])
+      .map((row) => ({ value: row.status, count: Number(row.count) }))
+      .sort(byCount),
     deletedCount: deleted.count ?? 0,
   }
 }
@@ -426,6 +505,13 @@ export async function readLists(): Promise<{ id: string; name: string }[]> {
 export async function ensureList(name: string): Promise<{ id: string; name: string }> {
   const trimmed = name.trim()
   if (!trimmed) throw new Error('A list needs a name.')
+  // Same ceiling a saved view's name has, and for the same reason: both are
+  // read in a one-line bar, and the column is `text` so nothing else stops a
+  // paste. Refused rather than silently truncated — a list he cannot find again
+  // under the name he gave it is worse than an error he can act on.
+  if (trimmed.length > LIMITS.name) {
+    throw new Error(`That list name is too long (max ${LIMITS.name} characters).`)
+  }
 
   const supabase = createServiceClient()
   const { data: existing } = await supabase
@@ -686,28 +772,6 @@ export async function saveLeads(request: SaveRequest): Promise<SaveResult> {
   }
 }
 
-/** Mark leads for the background pass. Returns how many are now waiting. */
-export async function queueEnrichment(leadIds: string[]): Promise<number> {
-  if (!leadIds.length) return 0
-
-  const supabase = createServiceClient()
-  const { data, error } = await supabase
-    .from('leads')
-    .update({
-      enrichment_state: 'queued',
-      enrichment_queued_at: new Date().toISOString(),
-      enrichment_error: null,
-    })
-    .in('id', leadIds)
-    .select('id')
-
-  if (error) {
-    console.error('[leads] could not queue enrichment', error.message)
-    return 0
-  }
-  return data?.length ?? 0
-}
-
 /* ------------------------------------------------------------------------- *
  * Bulk actions
  * ------------------------------------------------------------------------- */
@@ -824,6 +888,29 @@ export async function applyBulk(leadIds: string[], action: BulkAction): Promise<
       }
     }
 
+    /*
+     * The one bulk action that spends money, so it is the one that runs in front
+     * of the response instead of queueing.
+     *
+     * Every lead in the selection is a billable Place Details call, and the
+     * operator is entitled to be told what it cost him and what it found before
+     * the page moves. The pass stops itself at the monthly ceiling and says so.
+     */
+    case 'refresh': {
+      const pass = await runRefresh({ leadIds, source: 'manual' })
+      const said = [
+        `${pass.refreshed} ${plural(pass.refreshed, 'lead', 'leads')} refreshed`,
+        pass.changed ? `${pass.changed} changed` : null,
+        pass.reAudited ? `${pass.reAudited} re-audited` : null,
+        pass.failed ? `${pass.failed} could not be reached` : null,
+      ].filter(Boolean)
+
+      return {
+        affected: pass.refreshed,
+        message: pass.stoppedBy ? `${said.join(', ')}. ${pass.stoppedBy}` : `${said.join(', ')}.`,
+      }
+    }
+
     default:
       throw new Error('Unknown action.')
   }
@@ -843,23 +930,59 @@ export async function readLead(id: string): Promise<LeadRow | null> {
   return toRow(data as unknown as LibraryRecord, listNames)
 }
 
+/** One refresh row, as it comes back over the wire. */
+interface RefreshRow {
+  id: string
+  refreshed_at: string
+  changes: string[] | null
+  before: Snapshot | null
+  after: Snapshot | null
+  error: string | null
+}
+
+/**
+ * A refresh row as one sentence.
+ *
+ * Built here rather than stored, because it is a rendering of the codes and the
+ * values beside them — and a rendering that lives in the database is one that
+ * cannot be improved without a migration. A row written before the values were
+ * captured, or by a build with a code this one does not know, comes back with
+ * nothing to say rather than with a guess.
+ */
+function refreshSentence(row: RefreshRow): string | null {
+  if (row.error) return `Google could not be reached. ${row.error}`
+  if (!row.before || !row.after) return null
+
+  const codes = (row.changes ?? []).filter(isChangeCode)
+  if (!codes.length) return null
+
+  return describeDelta({ codes, before: row.before, after: row.after })
+}
+
 /**
  * Everything that has happened to this lead, as one sequence.
  *
- * Two tables, read separately and merged here rather than in SQL. A union view
- * would have to widen both sides to a common column list and cast the enum to
- * text to do it, and the result would still need sorting in one place — this
- * way each table keeps its own shape and the merge is four lines that can be
+ * Three tables now, read separately and merged here rather than in SQL. A union
+ * view would have to widen every side to a common column list and cast the enum
+ * to text to do it, and the result would still need sorting in one place — this
+ * way each table keeps its own shape and the merge is a few lines that can be
  * read.
  *
- * Both sides are limited before the merge, so a lead with three hundred notes
+ * The third table is `lead_refreshes`, and it belongs here rather than in a
+ * panel of its own for the reason the notes and the activities were merged in
+ * the first place: the operator worked this lead once, in one order. "I called
+ * them in May, they said they were thinking about it, and in July they built a
+ * website" is one story, and splitting it across two lists on the same page
+ * would make him assemble it himself every time he came back cold.
+ *
+ * Every side is limited before the merge, so a lead with three hundred notes
  * cannot push its status history off the end of the page: the limit costs the
  * oldest lines of each, which is what a limit on a history should cost.
  */
 export async function readTimeline(leadId: string, limit = 200): Promise<TimelineEntry[]> {
   const supabase = createServiceClient()
 
-  const [activities, notes] = await Promise.all([
+  const [activities, notes, refreshes] = await Promise.all([
     supabase
       .from('lead_activities')
       .select('id, type, occurred_at, summary, status_before, status_after')
@@ -872,9 +995,25 @@ export async function readTimeline(leadId: string, limit = 200): Promise<Timelin
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false })
       .limit(limit),
+    supabase
+      .from('lead_refreshes')
+      .select('id, refreshed_at, changes, before, after, error')
+      .eq('lead_id', leadId)
+      .order('refreshed_at', { ascending: false })
+      .limit(limit),
   ])
 
   const entries: TimelineEntry[] = [
+    ...((refreshes.data ?? []) as RefreshRow[]).map((row) => ({
+      id: `refresh:${row.id}`,
+      kind: 'refresh' as const,
+      type: null,
+      at: row.refreshed_at,
+      body: refreshSentence(row),
+      statusBefore: null,
+      statusAfter: null,
+      changes: row.changes ?? [],
+    })),
     ...((activities.data ?? []) as {
       id: number
       type: ActivityType
@@ -1001,12 +1140,15 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
 
   // The score and the history are read alongside rather than after: neither
   // hangs off the audit, and a lead with no audit at all can carry both.
-  const [lead, score, timeline] = await Promise.all([
+  const [lead, score, previousScore, timeline] = await Promise.all([
     readLead(id),
     readCurrentScore(id),
+    readPreviousScore(id),
     readTimeline(id),
   ])
   if (!lead) return null
+
+  const movement = compareScores(previousScore, score)
 
   const { data: audits } = await supabase
     .from('lead_audits')
@@ -1018,7 +1160,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score, timeline }
+  if (!newest) return { lead, audit: null, history: [], score, movement, timeline }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -1057,7 +1199,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score, timeline }
+  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline }
 }
 
 export async function updateLead(
@@ -1077,6 +1219,12 @@ export async function updateLead(
 export async function addNote(leadId: string, body: string): Promise<void> {
   const trimmed = body.trim()
   if (!trimmed) throw new Error('A note needs something in it.')
+  // The column is `text`, so this is the only thing between a stray paste and a
+  // history entry nobody can read past. The save route caps at the same number;
+  // the constant is shared so the two cannot drift.
+  if (trimmed.length > LIMITS.note) {
+    throw new Error(`That note is too long (max ${LIMITS.note} characters).`)
+  }
 
   const supabase = createServiceClient()
   const { error } = await supabase.from('lead_notes').insert({ lead_id: leadId, body: trimmed })
