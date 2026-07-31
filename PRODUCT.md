@@ -49,7 +49,8 @@ because the split is a compliance position as much as a product one.
 A session runs roughly: search an area and category → scan results for weak web presence →
 save the few worth keeping → later, work the saved leads and record outreach.
 
-Three top-level surfaces, confirmed by the user:
+Four top-level surfaces. The first three were confirmed by the user at the outset; the fourth
+was asked for once there was outreach history worth reading:
 
 - **Search** — transient results. Desktop-shaped; not designed for phone width.
 - **Leads** — the permanent library. Expected to reach **thousands** of records, accumulating
@@ -57,6 +58,10 @@ Three top-level surfaces, confirmed by the user:
   load-bearing, and pagination or virtualization is a structural concern, not a later
   optimization.
 - **Outreach** — the follow-up queue: who is due, who has gone cold.
+- **Outcomes** — what the audit found, measured against how the calls went. Read between
+  sessions rather than during one. It reports and never tunes: the weighting stays a decision
+  the owner makes by hand, and the surface's other job is to say when there is still too
+  little evidence to make it.
 
 ## Capabilities and Constraints
 
