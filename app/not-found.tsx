@@ -1,12 +1,13 @@
 
 import { CommandLink } from '@/components/ui/command-button'
+import { Wordmark } from '@/components/shell/wordmark'
 import { EmptyState } from '@/components/ui/states'
 
 export default function NotFound() {
   return (
     <div className="flex min-h-dvh flex-1 flex-col">
       <header className="border-b border-rule px-3 py-2">
-        <span className="label text-ink">Lead Engine</span>
+        <Wordmark />
       </header>
       <EmptyState
         headline="No such surface"
