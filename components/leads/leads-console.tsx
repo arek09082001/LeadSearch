@@ -13,6 +13,7 @@ import { SavedViews } from '@/components/leads/saved-views'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { CommandButton } from '@/components/ui/command-button'
 import { useListKeys } from '@/components/ui/use-list-keys'
+import { useRowSelection } from '@/components/ui/use-row-selection'
 import { ago } from '@/lib/leads/dates'
 import {
   activeFilterCount,
@@ -96,6 +97,22 @@ export function LeadsConsole({
     // The cursor is a position in a list of rows. A new question is a new list.
     setCursor(-1)
   }
+
+  /*
+   * Selection lives here rather than in the table, because the table is not the
+   * only thing that touches it: the bulk bar clears it, a finished action
+   * empties it, "select all matching" widens it and a filter change throws it
+   * away. One owner, and the gestures in the rows are one more caller.
+   */
+  const ids = useMemo(() => listing.rows.map((row) => row.id), [listing.rows])
+  const onSelect = useCallback((next: Set<string>) => {
+    setSelected(next)
+    // Touching a box is a statement about these rows, so it ends the "everything
+    // matching the filters" claim rather than quietly keeping it — otherwise
+    // un-ticking one row would still delete all four thousand.
+    setWholeFilter(false)
+  }, [])
+  const selection = useRowSelection({ ids, selected, onSelect })
 
   const navigate = useCallback(
     (next: LeadFilters) => router.push(filtersToHref(next)),
@@ -254,14 +271,23 @@ export function LeadsConsole({
       searchRef.current?.focus()
       searchRef.current?.select()
     },
+    onToggle: selection.toggleAt,
+    onExtend: selection.extendTo,
+    onSelectAll: () => {
+      // One key, both directions — `a` on a full page is how you empty it.
+      if (wholeFilter || selected.size >= listing.rows.length) {
+        setWholeFilter(false)
+        selection.setAll(false)
+      } else {
+        selection.setAll(true)
+      }
+    },
     onEscape: () => {
       // The most recent thing first: a widened selection, then the ticks, then
       // the cursor. Escape should undo one decision, not the whole session.
       if (naming) setNaming(false)
-      else if (wholeFilter || selected.size) {
-        setSelected(new Set())
-        setWholeFilter(false)
-      } else setCursor(-1)
+      else if (wholeFilter || selected.size) selection.clear()
+      else setCursor(-1)
     },
   })
 
@@ -308,8 +334,12 @@ export function LeadsConsole({
           </span>
         ) : null}
 
+        <span className="hidden font-data text-micro text-ink-faint lg:inline">
+          j/k move · x tick · ⇧j/k run · a all
+        </span>
+
         <span className="hidden font-data text-micro text-ink-faint xl:inline">
-          j/k move · ⏎ open · s save view · / search
+          ⏎ open · s save view · / search
         </span>
 
         {/* Principle 5: the Google-sourced columns on these rows state their age. */}
@@ -400,10 +430,7 @@ export function LeadsConsole({
         lists={lists}
         deletedView={filters.deleted}
         busy={busy}
-        onClear={() => {
-          setSelected(new Set())
-          setWholeFilter(false)
-        }}
+        onClear={selection.clear}
         onSelectFiltered={selectFiltered}
         onAction={(action) => void act(action)}
       />
@@ -438,7 +465,7 @@ export function LeadsConsole({
           <LeadsTable
             rows={listing.rows}
             selected={selected}
-            onSelect={setSelected}
+            selection={selection}
             sort={filters.sort}
             desc={filters.desc}
             onSort={onSort}
