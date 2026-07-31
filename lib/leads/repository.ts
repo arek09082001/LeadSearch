@@ -533,7 +533,16 @@ async function readListNames(): Promise<Map<string, string>> {
   return new Map((data ?? []).map((list) => [list.id, list.name]))
 }
 
-async function countLibrary(): Promise<number> {
+/**
+ * How many leads are in the book at all, ignoring every filter.
+ *
+ * Exported because the map needs it and cannot get it the way the table does:
+ * `queryLeads` returns it alongside a page of rows, and the map does not want a
+ * page of rows. Without this number an empty map cannot tell "you have filtered
+ * everything out" from "you have not saved anything yet", which are two
+ * different sentences with two different recoveries.
+ */
+export async function countLibrary(): Promise<number> {
   const supabase = createServiceClient()
   const { count } = await supabase
     .from('leads')

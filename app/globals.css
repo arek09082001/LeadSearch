@@ -106,6 +106,51 @@
   }
 }
 
+/*
+  MapLibre's own chrome, brought into the world.
+
+  The library ships a stylesheet the canvas genuinely needs — positioning, touch
+  handling, the container's overflow — and, bundled with it, an attribution
+  control that is a white rounded pill with a shadow on it. Three things this
+  system does not have. The control itself stays, because the tiles are licensed
+  on the condition that their credit is displayed and rendering it from the
+  source's own TileJSON is what keeps that credit true; only its clothes change.
+
+  Written flat rather than in @layer components so it beats the library's own
+  rules without an !important anywhere.
+*/
+.maplibregl-map {
+  font-family: var(--font-ui);
+}
+
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl,
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl {
+  margin: 0;
+}
+
+.maplibregl-ctrl-attrib {
+  background-color: color-mix(in oklab, var(--color-ground) 88%, transparent);
+  color: var(--color-ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  line-height: 1rem;
+  padding: 1px 6px;
+  border-top: 1px solid var(--color-rule);
+  border-left: 1px solid var(--color-rule);
+  border-radius: var(--radius-none);
+  box-shadow: none;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--color-ink-faint);
+  text-decoration: none;
+}
+
+.maplibregl-ctrl-attrib a:hover {
+  color: var(--color-ink-dim);
+  text-decoration: underline;
+}
+
 @utility label {
   font-family: var(--font-ui);
   font-size: var(--text-label);

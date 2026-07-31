@@ -264,3 +264,23 @@ export function IconFork(props: IconProps) {
     </Svg>
   )
 }
+
+/** Map: the folded sheet — three panels, creased. No curves, like everything here. */
+export function IconMap(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M1.5 3.5 6 2l4 2 4.5-1.5v10L10 14l-4-2-4.5 1.5z" />
+      <path d="M6 2v10M10 4v10" />
+    </Svg>
+  )
+}
+
+/** Target: a fix taken on a point. Used to put the map back over Germany. */
+export function IconTarget(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="4.25" />
+      <path d="M8 1v2.5M8 12.5V15M1 8h2.5M12.5 8H15" />
+    </Svg>
+  )
+}

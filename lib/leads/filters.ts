@@ -183,9 +183,18 @@ export function toSearchParams(filters: LeadFilters): URLSearchParams {
   return params
 }
 
-export function filtersToHref(filters: LeadFilters): string {
+/**
+ * The same filters as a link.
+ *
+ * `path` exists because the book has two drawings of it — the table at `/leads`
+ * and the map at `/map` — and they share this codec rather than each building a
+ * query string of their own. That is what lets the operator narrow the library
+ * in the table, switch to the map, and be looking at the same set of leads: a
+ * saved view is a query string, and both surfaces read it with `parseFilters`.
+ */
+export function filtersToHref(filters: LeadFilters, path = '/leads'): string {
   const query = toSearchParams(filters).toString()
-  return query ? `/leads?${query}` : '/leads'
+  return query ? `${path}?${query}` : path
 }
 
 /**

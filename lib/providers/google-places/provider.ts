@@ -48,6 +48,23 @@ const MAX_RESULTS_HARD_CAP = 60
 /** Google's per-page maximum. Fewer pages means fewer billable requests. */
 const PAGE_SIZE = 20
 
+/**
+ * The same fields, minus the one Nearby Search does not have.
+ *
+ * `nextPageToken` belongs to the Text Search response; Nearby Search answers in
+ * a single page and never defines it. Asking an endpoint for a field it does not
+ * have is not ignored — Google refuses the entire request with HTTP 400,
+ * "Request contains an invalid argument", naming nothing. That is what the map's
+ * category-only search met the first time anything in this product reached this
+ * endpoint at all: every search before it had text in it and took the other
+ * branch, so the mask had never been sent here.
+ *
+ * The billing tier stays `SEARCH_TIER`, computed from the full text mask. It is
+ * the higher of the two, and a spend guard that quotes high is the only kind
+ * worth having.
+ */
+const NEARBY_FIELD_MASK = SEARCH_FIELD_MASK.filter((field) => field !== 'nextPageToken')
+
 function apiKey(): string {
   const key = process.env.GOOGLE_PLACES_API_KEY
   if (!key) {
@@ -402,7 +419,7 @@ export class GooglePlacesProvider implements LeadProvider {
             },
           },
         },
-        SEARCH_FIELD_MASK,
+        NEARBY_FIELD_MASK,
         'search',
         ctx?.signal,
       ),

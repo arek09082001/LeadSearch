@@ -58,6 +58,7 @@ export function SaveBar({
   onSelect,
   searchId,
   onSaved,
+  rangeHint = true,
 }: {
   rows: SearchRow[]
   selected: Set<string>
@@ -65,6 +66,14 @@ export function SaveBar({
   searchId: string | null
   /** Lets the table redraw its `In book` marks without another round trip. */
   onSaved: (items: SaveResultItem[]) => void
+  /**
+   * Whether the caller draws rows with tick boxes in them.
+   *
+   * The map does not — a selection there is made by clicking marks on a field —
+   * so it turns the shift-click hint off rather than advertising a gesture that
+   * surface does not have.
+   */
+  rangeHint?: boolean
 }) {
   const [lists, setLists] = useState<ListOption[]>([])
   const [listId, setListId] = useState<string | null>(null)
@@ -179,9 +188,11 @@ export function SaveBar({
             {selected.size} selected
           </span>
 
-          <span className="hidden font-data text-micro text-ink-faint lg:inline">
-            ⇧click a second box for the run between
-          </span>
+          {rangeHint ? (
+            <span className="hidden font-data text-micro text-ink-faint lg:inline">
+              ⇧click a second box for the run between
+            </span>
+          ) : null}
 
           <Menu label="Select" width="w-60">
             {(close) => (
