@@ -140,6 +140,8 @@ export interface LeadFilters {
   audit: AuditFilter[]
   /** What the refresh pass last found. Empty means "don't care", never "nothing changed". */
   change: ChangeFilter[]
+  /** Only leads with an email address off their Impressum — the writable list. */
+  hasEmail: boolean
   followUp: FollowUpFilter | null
   sort: LeadSort
   desc: boolean
@@ -158,6 +160,7 @@ export const DEFAULT_FILTERS: LeadFilters = {
   scoreMax: null,
   audit: [],
   change: [],
+  hasEmail: false,
   followUp: null,
   // The operator's stated default: highest score first.
   sort: 'score',
@@ -201,6 +204,15 @@ export interface LeadRow {
   mapsUri: string | null
   /** Age of every Google-sourced field above. Principle 5: it must be sayable. */
   fetchedAt: string
+
+  /**
+   * Read off the business's own Impressum, not off Google — which is the point:
+   * Google supplies a phone number and almost never an email, and this is what
+   * makes written outreach possible at all.
+   */
+  imprintEmail: string | null
+  imprintPhone: string | null
+  imprintFetchedAt: string | null
 
   status: LeadStatus
   score: number | null
@@ -483,6 +495,21 @@ export interface LeadAudit {
   platform: string | null
   platformVersion: string | null
   presenceKind: string | null
+
+  /**
+   * What the site says about itself. Null throughout on an audit written before
+   * the Impressum check existed — `checkerVersion` is what tells that apart
+   * from an audit that looked and found nothing.
+   */
+  imprintUrl: string | null
+  imprintHasAddress: boolean | null
+  imprintHasPhone: boolean | null
+  imprintHasEmail: boolean | null
+  imprintHasVatId: boolean | null
+  hasPrivacyPolicy: boolean | null
+  loadsExternalFonts: boolean | null
+  hasExternalMaps: boolean | null
+  contactFormInsecure: boolean | null
 
   psiState: PsiState
   psiPerformance: number | null

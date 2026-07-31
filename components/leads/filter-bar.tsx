@@ -242,6 +242,32 @@ export function FilterBar({
         }
       />
 
+      {/*
+        The writable list, as one press.
+
+        A toggle rather than a menu because it is one question with one answer,
+        and it earns a place in the bar because it is the question that starts a
+        different kind of session: Google supplies a phone number for nearly
+        every lead and an email address for almost none, so "who can I write
+        to" is not answerable from anything else on this bar.
+
+        Deliberately not folded into the Audit menu. Those entries are faults on
+        a website; this is a fact about the business, and merging them would put
+        "has an email address" in a list headed by "No HTTPS".
+      */}
+      <button
+        type="button"
+        aria-pressed={filters.hasEmail}
+        onClick={() => onChange({ hasEmail: !filters.hasEmail })}
+        className={`label inline-flex items-center border px-2 py-1.5 transition-colors ${
+          filters.hasEmail
+            ? 'border-signal text-signal'
+            : 'border-rule-strong text-ink-dim hover:border-ink-faint hover:bg-raise hover:text-ink'
+        }`}
+      >
+        Has email
+      </button>
+
       <Menu
         label={
           <span className={filters.followUp ? 'text-signal' : ''}>{followUpLabel}</span>
@@ -343,6 +369,7 @@ export function FilterBar({
               scoreMax: null,
               audit: [],
               change: [],
+              hasEmail: false,
               followUp: null,
             })
           }

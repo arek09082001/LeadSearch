@@ -28,8 +28,15 @@ import { connect, type PeerCertificate, type TLSSocket } from 'node:tls'
  * than false.
  */
 
-/** Bumped whenever the parsing changes, so an old audit stays explainable. */
-export const CHECKER_VERSION = 'measure-2'
+/**
+ * Bumped whenever the parsing changes, so an old audit stays explainable.
+ *
+ * `measure-3` is where the Impressum check joined the pass. The bump matters
+ * more than usual here: on a `measure-2` audit the imprint columns are null
+ * because nobody looked, and on a `measure-3` audit they are null because
+ * looking found nothing. Without the version those two read identically.
+ */
+export const CHECKER_VERSION = 'measure-3'
 
 const TIMEOUT_MS = 12_000
 /** The TLS handshake alone. Short: it is one round trip, not a page load. */
@@ -78,6 +85,36 @@ export interface Measurement {
   presenceKind: PresenceKind | null
 
   raw: Record<string, unknown> | null
+}
+
+/**
+ * The page as it was actually fetched, handed to whatever runs next.
+ *
+ * NOT a measurement, and never stored: `writeAudit` maps columns one by one and
+ * this is not among them. It exists so the Impressum check can read the markup
+ * the checker has already paid for rather than asking the same server for the
+ * same page a second time — see `lib/enrichment/imprint.ts`.
+ */
+export interface FetchedPage {
+  html: string
+  finalUrl: string
+  isHttps: boolean
+  /**
+   * The fetch fell back to http:// because the certificate would not verify.
+   *
+   * Load-bearing, not trivia. `isHttps` is false on such a site, and anything
+   * downstream that reads it as "this business serves plaintext" would be
+   * wrong: the site does serve TLS, badly. `invalid_certificate` is the finding
+   * that belongs to it, and no other check may claim the same fault.
+   */
+  fetchedOverHttp: boolean
+}
+
+/** What a visit produced: the observations, and the page they were read from. */
+export interface SiteVisit {
+  measurement: Measurement
+  /** Present only when the site answered 2xx. Null in every other outcome. */
+  page: FetchedPage | null
 }
 
 function base(): Measurement {
@@ -508,8 +545,11 @@ async function probeFavicon(origin: string): Promise<boolean> {
 /*
  * Identify honestly. A checker that pretends to be Chrome is a checker whose
  * operator cannot answer for what it did.
+ *
+ * Exported so the Impressum check announces itself with the same string. Two
+ * user agents for one tool would mean two things to answer for.
  */
-function userAgent(): string {
+export function userAgent(): string {
   return `LeadEngineAudit/${CHECKER_VERSION} (+internal prospecting tool)`
 }
 
@@ -524,13 +564,19 @@ function userAgent(): string {
  * `unreachable` fact about the business, and a checker that crashed is an
  * `error` that says nothing about it. Conflating those two would let a bad
  * network make every prospect look like a prospect.
+ *
+ * Returns the page alongside the measurement so the next check can read it
+ * without fetching it again. The page is not part of the record — nothing
+ * writes it anywhere — it is the raw material the audit was made from, on loan
+ * to whoever runs next.
  */
-export async function measureWebsite(website: string | null): Promise<Measurement> {
+export async function measureWebsite(website: string | null): Promise<SiteVisit> {
   const result = base()
   const started = Date.now()
-  const done = () => {
+  let page: FetchedPage | null = null
+  const done = (): SiteVisit => {
     result.durationMs = Date.now() - started
-    return result
+    return { measurement: result, page }
   }
 
   if (!website?.trim()) {
@@ -595,8 +641,9 @@ export async function measureWebsite(website: string | null): Promise<Measuremen
     })
 
     result.httpStatus = response.status
-    result.finalUrl = response.url || target.toString()
-    result.isHttps = result.finalUrl.startsWith('https://')
+    const landed = response.url || target.toString()
+    result.finalUrl = landed
+    result.isHttps = landed.startsWith('https://')
 
     const finalUrl = normalizeUrl(result.finalUrl)
     // Reclassify on the destination: a domain that redirects to Facebook is a
@@ -621,6 +668,17 @@ export async function measureWebsite(website: string | null): Promise<Measuremen
     }
 
     result.websiteStatus = 'reachable'
+
+    // Only now, past every early return above: a page exists and was read. The
+    // Impressum check keys off `page` being non-null and so inherits exactly
+    // that condition rather than restating it.
+    page = {
+      html,
+      finalUrl: landed,
+      isHttps: landed.startsWith('https://'),
+      fetchedOverHttp: downgraded,
+    }
+
     result.isMobileFriendly = detectViewport(html)
 
     const title = detectTitle(html)

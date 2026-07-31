@@ -1,7 +1,8 @@
 import 'server-only'
 
 import { measureWebsite } from '@/lib/enrichment/checker'
-import { judgeMeasurement, judgePerformance } from '@/lib/enrichment/findings'
+import { judgeImprint, judgeMeasurement, judgePerformance } from '@/lib/enrichment/findings'
+import { measureImprint, shouldReadImprint } from '@/lib/enrichment/imprint'
 import { hasPageSpeedKey, measurePageSpeed } from '@/lib/enrichment/pagespeed'
 import {
   claimPerformanceWork,
@@ -35,6 +36,13 @@ import { createServiceClient } from '@/lib/supabase/server'
  * `psi_state = 'pending'`. Stage two drains that queue separately, filling in
  * the same audit row as the scores arrive. A lead is never blocked on Google,
  * and the library can show both states honestly.
+ *
+ * WHY THE IMPRINT CHECK IS NOT A THIRD STAGE. It reads the page stage one is
+ * already holding, and costs one request to a host we have just finished with —
+ * neither of which is worth a queue. More importantly, running it inline keeps
+ * the audit atomic: `lead_score_queue` releases a lead as soon as PageSpeed has
+ * settled and any finding exists, so a third asynchronous stage would score
+ * leads in the window before their Impressum verdicts arrived. See `auditOne`.
  *
  * The consequence to design around, in both stages: this process can vanish
  * mid-run. A serverless invocation ends when it ends. Hence every claim is a
@@ -84,6 +92,16 @@ const SOFT_DEADLINE_MS = 50_000
  * it is auditing something that nobody is auditing.
  */
 const PSI_MIN_REMAINING_MS = 38_000
+
+/**
+ * The Impressum lookup gets the same treatment, at its own scale.
+ *
+ * Its whole budget is ten seconds; twelve leaves room for the write that
+ * follows. A lead audited without it keeps `checker_version = 'measure-2'`
+ * semantics for those columns — null, meaning nobody looked — and comes back
+ * round on the next pass rather than being recorded as clean.
+ */
+const IMPRINT_MIN_REMAINING_MS = 12_000
 
 interface Claim {
   id: string
@@ -184,10 +202,34 @@ async function pooled<T>(
  * Stage one — the front door
  * ------------------------------------------------------------------------- */
 
-async function auditOne(lead: Claim): Promise<void> {
+/**
+ * One lead, front door and legal notice.
+ *
+ * The Impressum check runs HERE rather than as a third stage beside PageSpeed,
+ * for three reasons worth stating because the alternative looks tidier:
+ *
+ *   - It needs the page the checker has already fetched and is still holding.
+ *     A stage that ran later would have to buy the homepage a second time.
+ *   - It costs one request to a host we finished with moments ago, not twenty
+ *     seconds against somebody else's rate limit. It does not need a queue.
+ *   - It keeps the audit ATOMIC. `lead_score_queue` releases a lead once
+ *     PageSpeed has settled and any finding exists; a third asynchronous stage
+ *     would have to be added to that gate or leads would be scored in the
+ *     window before their Impressum verdicts landed.
+ */
+async function auditOne(lead: Claim, deadline: number): Promise<void> {
   try {
-    const measurement = await measureWebsite(lead.website)
-    await writeAudit(lead.id, measurement, judgeMeasurement(measurement))
+    const { measurement, page } = await measureWebsite(lead.website)
+
+    const imprint =
+      page && shouldReadImprint(measurement) && deadline - Date.now() > IMPRINT_MIN_REMAINING_MS
+        ? await measureImprint(page)
+        : null
+
+    await writeAudit(lead.id, measurement, imprint, [
+      ...judgeMeasurement(measurement),
+      ...judgeImprint(imprint),
+    ])
   } catch (error) {
     const message = error instanceof Error ? error.message : 'The audit failed unexpectedly.'
     console.error('[enrichment] audit failed', { leadId: lead.id, message })
@@ -310,7 +352,9 @@ export async function runEnrichment(leadIds: string[] | null = null): Promise<En
 
     const work = await claim(leadIds, BATCH_LIMIT)
     if (work.length) {
-      const unstarted = await pooled(work, CONCURRENCY, deadline, () => false, auditOne)
+      const unstarted = await pooled(work, CONCURRENCY, deadline, () => false, (lead) =>
+        auditOne(lead, deadline),
+      )
       await release(unstarted.map((lead) => lead.id))
       pass.audited = work.length - unstarted.length
     }

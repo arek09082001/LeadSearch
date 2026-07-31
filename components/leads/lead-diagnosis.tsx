@@ -154,6 +154,61 @@ function yesNo(value: boolean | null): string | null {
 }
 
 /**
+ * An address to write to, read off the business's own Impressum.
+ *
+ * Above the notebook rather than in it, because it is the one thing in this
+ * column that is acted on rather than checked. Google sells a phone number for
+ * nearly every lead and an email address for almost none, so for most of the
+ * book this is the only way to make contact that is not a cold call.
+ *
+ * Amber, not the green reserved for volatile Google data: this was not bought
+ * from anybody, it was read off the front of the business's own shop.
+ */
+function ImprintContact({ lead }: { lead: LeadDetail['lead'] }) {
+  if (!lead.imprintEmail && !lead.imprintPhone) return null
+
+  return (
+    <>
+      <h2 className="label border-b border-rule bg-panel px-3 py-1.5 text-ink-ghost">
+        Imprint contact
+      </h2>
+      <dl className="divide-y divide-rule border-b border-rule">
+        {lead.imprintEmail ? (
+          <div className="flex items-baseline gap-3 px-3 py-1">
+            <dt className="label w-32 shrink-0 text-ink-ghost">Email</dt>
+            <dd className="min-w-0 truncate font-data text-micro">
+              <a
+                href={`mailto:${lead.imprintEmail}`}
+                className="text-signal transition-colors hover:underline"
+                title={lead.imprintEmail}
+              >
+                {lead.imprintEmail}
+              </a>
+            </dd>
+          </div>
+        ) : null}
+        {lead.imprintPhone ? (
+          <div className="flex items-baseline gap-3 px-3 py-1">
+            <dt className="label w-32 shrink-0 text-ink-ghost">Phone</dt>
+            <dd className="min-w-0 truncate font-data text-micro text-ink-dim">
+              {lead.imprintPhone}
+            </dd>
+          </div>
+        ) : null}
+        {lead.imprintFetchedAt ? (
+          <div className="flex items-baseline gap-3 px-3 py-1">
+            <dt className="label w-32 shrink-0 text-ink-ghost">Read</dt>
+            <dd className="min-w-0 truncate font-data text-micro text-ink-faint">
+              {shortDate(lead.imprintFetchedAt)}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+    </>
+  )
+}
+
+/**
  * What was observed, as opposed to what was concluded.
  *
  * The same split the schema draws, made visible: this column is the audit's
@@ -187,6 +242,15 @@ function Measurements({ audit }: { audit: LeadAudit }) {
         ? `${audit.platform}${audit.platformVersion ? ` ${audit.platformVersion}` : ''}`
         : null,
     ],
+    ['Impressum', audit.imprintUrl],
+    ['Imprint address', yesNo(audit.imprintHasAddress)],
+    ['Imprint phone', yesNo(audit.imprintHasPhone)],
+    ['Imprint email', yesNo(audit.imprintHasEmail)],
+    ['VAT number', yesNo(audit.imprintHasVatId)],
+    ['Privacy policy', yesNo(audit.hasPrivacyPolicy)],
+    ['Google fonts', yesNo(audit.loadsExternalFonts)],
+    ['Maps embedded', yesNo(audit.hasExternalMaps)],
+    ['Form unencrypted', yesNo(audit.contactFormInsecure)],
     ['PageSpeed', audit.psiPerformance === null ? null : `${audit.psiPerformance}/100`],
     ['LCP', audit.psiLcpMs === null ? null : seconds(audit.psiLcpMs)],
     ['CLS', audit.psiCls === null ? null : audit.psiCls.toFixed(2)],
@@ -463,6 +527,14 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
             business with no website has no phone view to photograph.
           */}
           {audit ? <LeadScreenshot audit={audit} stale={auditIsStale} /> : null}
+
+          {/*
+            Then who to write to. Below the screenshot because that one is read
+            at a glance and this one is acted on — and above the notebook for
+            the same reason the screenshot is: it is a thing to do, not a thing
+            to check against.
+          */}
+          <ImprintContact lead={lead} />
 
           {audit ? (
             <>
