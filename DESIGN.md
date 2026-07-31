@@ -212,7 +212,7 @@ icon button that goes `alert` on hover.
 
 **Nav** — icon + `label` + key hint. The active surface is marked by a 1px `signal` rule
 along the bottom edge and `ink` text; inactive is `ink-faint`, hover `ink-dim`. It is a
-rule, never a pill or a fill. `Alt+1/2/3` jump between surfaces — `Alt` deliberately, so
+rule, never a pill or a fill. `Alt+1/2/3/4` jump between surfaces — `Alt` deliberately, so
 plain digits stay free for filter and search fields.
 
 **Status strip** — a `panel` band: a 1.5px square dot (`live` green or `signal` amber), the

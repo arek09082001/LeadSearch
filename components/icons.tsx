@@ -247,3 +247,20 @@ export function IconPulse(props: IconProps) {
     </Svg>
   )
 }
+
+/**
+ * Outcomes: one line that forks — what became of what the audit found.
+ *
+ * Deliberately not a bar chart, a dial or a rising arrow. This product does not
+ * draw charts, and a glyph that implied one would promise the page something it
+ * refuses to be.
+ */
+export function IconFork(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 8h4.5" />
+      <path d="M6.5 8 9.5 4.5H14" />
+      <path d="M6.5 8 9.5 11.5H14" />
+    </Svg>
+  )
+}

@@ -4,12 +4,19 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
-import { IconBook, IconSearch, IconSignal } from '@/components/icons'
+import { IconBook, IconFork, IconSearch, IconSignal } from '@/components/icons'
 
+/*
+ * Working order, left to right: find them, keep them, call them — and then, last
+ * and least often, ask whether any of it was ranked right. Outcomes sits at the
+ * end because it is the one surface that is not part of a session; it is read
+ * between sessions, after enough calls have accumulated to mean something.
+ */
 export const SURFACES = [
   { href: '/search', label: 'Search', key: '1', Icon: IconSearch },
   { href: '/leads', label: 'Leads', key: '2', Icon: IconBook },
   { href: '/outreach', label: 'Outreach', key: '3', Icon: IconSignal },
+  { href: '/outcomes', label: 'Outcomes', key: '4', Icon: IconFork },
 ] as const
 
 function isActive(pathname: string, href: string) {
@@ -45,12 +52,20 @@ export function Nav() {
             href={href}
             aria-current={active ? 'page' : undefined}
             className={[
-              'group relative flex items-center gap-1.5 px-2 py-2 transition-colors duration-150',
+              'group relative flex items-center gap-1.5 px-1.5 py-2 transition-colors duration-150',
               'md:gap-2 md:px-3',
               active ? 'text-ink' : 'text-ink-faint hover:text-ink-dim',
             ].join(' ')}
           >
-            <Icon className="size-3.5 shrink-0" />
+            {/*
+              The glyph is the last thing on this rule that can be spared, and at
+              four surfaces it has to be. DESIGN.md fixes the order of what drops
+              on a phone — the wordmark, then the key hints — and fixes what never
+              does: the surface label. Four labels plus four icons run past 360px
+              and push the sign-out control off the edge, so below `md` the icons
+              go and every surface stays named and reachable.
+            */}
+            <Icon className="hidden size-3.5 shrink-0 md:block" />
             <span className="label">{label}</span>
             {/* The key hint is for the desk, where a keyboard exists. */}
             <span
