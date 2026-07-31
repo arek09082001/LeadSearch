@@ -1,11 +1,14 @@
 import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
+import { LeadActions } from '@/components/leads/lead-actions'
+import { LeadTimeline } from '@/components/leads/lead-timeline'
 import { ReAudit } from '@/components/leads/re-audit'
 import { ScoreBreakdown } from '@/components/leads/score-breakdown'
 import { SEVERITY_TONE } from '@/components/leads/tone'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
+import { fullDate, dueLabel, shortDate } from '@/lib/leads/dates'
 import { formatPlaceType } from '@/lib/places-types'
 import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
 
@@ -24,18 +27,6 @@ import type { AuditFinding, LeadAudit, LeadDetail } from '@/lib/leads/types'
  * already has a valid certificate is what keeps him from opening a call with
  * something the owner can immediately disprove.
  */
-
-function fullDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${date.getFullYear()}, ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-}
-
-function shortDate(iso: string | null): string {
-  if (!iso) return '—'
-  const date = new Date(iso)
-  return `${String(date.getDate()).padStart(2, '0')}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getFullYear()).slice(2)}`
-}
 
 function seconds(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`
@@ -220,7 +211,7 @@ function Measurements({ audit }: { audit: LeadAudit }) {
  * ------------------------------------------------------------------------- */
 
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history, score } = detail
+  const { lead, audit, history, score, timeline } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -263,8 +254,16 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
           )}
           {lead.primaryType ? <span>{formatPlaceType(lead.primaryType)}</span> : null}
           <span>saved {shortDate(lead.savedAt)}</span>
+          {/* His own decision coming back at him, so it is amber, not a fault. */}
+          {lead.followUpAt ? (
+            <span className="text-signal">
+              follow up {shortDate(lead.followUpAt)} · {dueLabel(lead.followUpAt)}
+            </span>
+          ) : null}
         </div>
       </header>
+
+      <LeadActions lead={lead} />
 
       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem]">
         <section className="min-w-0">
@@ -328,6 +327,15 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
               ) : null}
             </>
           )}
+
+          {/*
+            The history sits under the diagnosis rather than in the column to
+            the right, and in the wide half rather than the narrow one, because
+            it is prose he wrote. The right column is the audit's notebook —
+            measurements and past runs — and his own account of the lead is not
+            a measurement.
+          */}
+          <LeadTimeline entries={timeline} />
         </section>
 
         <aside className="min-w-0 border-t border-rule lg:border-l lg:border-t-0">

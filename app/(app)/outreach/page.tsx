@@ -1,22 +1,21 @@
 import type { Metadata } from 'next'
 
-import { StatusStrip } from '@/components/shell/status-strip'
-import { EmptyState } from '@/components/ui/states'
-import { CommandLink } from '@/components/ui/command-button'
+import { OutreachConsole } from '@/components/outreach/outreach-console'
+import { readOutreach } from '@/lib/leads/repository'
+
+/*
+ * The queue.
+ *
+ * A server component reading the repository directly, like the book it is two
+ * questions about. Nothing is cached: "due" is answered against today's date
+ * and the operator is the only reader, so a queue served from a cache would be
+ * a queue that still lists the lead he just worked.
+ */
 
 export const metadata: Metadata = { title: 'Outreach — Lead Engine' }
+export const dynamic = 'force-dynamic'
 
-export default function OutreachPage() {
-  return (
-    <>
-      <StatusStrip provenance="book" detail="0 due · 0 cold" />
-      <EmptyState
-        headline="Nothing queued"
-        body="Leads you have contacted show up here when they are due for a follow-up, or when they have gone quiet long enough to call cold. Save a lead first."
-        action={
-          <CommandLink href="/leads" variant="primary">Go to the book</CommandLink>
-        }
-      />
-    </>
-  )
+export default async function OutreachPage() {
+  const { due, cold } = await readOutreach()
+  return <OutreachConsole due={due} cold={cold} />
 }

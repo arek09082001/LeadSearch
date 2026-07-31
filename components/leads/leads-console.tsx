@@ -11,7 +11,15 @@ import { LeadsTable } from '@/components/leads/leads-table'
 import { SavedViews } from '@/components/leads/saved-views'
 import { StatusStrip } from '@/components/shell/status-strip'
 import { CommandButton } from '@/components/ui/command-button'
-import { filtersToHref, naturalDesc, toSearchParams } from '@/lib/leads/filters'
+import { useListKeys } from '@/components/ui/use-list-keys'
+import { ago } from '@/lib/leads/dates'
+import {
+  activeFilterCount,
+  filtersToHref,
+  naturalDesc,
+  sameFilters,
+  toSearchParams,
+} from '@/lib/leads/filters'
 import type {
   BulkAction,
   BulkResult,
@@ -39,14 +47,6 @@ import type {
 /** How long a delete stays one click from undone. */
 const UNDO_WINDOW_MS = 20_000
 
-function age(iso: string): string {
-  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)
-  if (days < 1) return 'today'
-  if (days === 1) return 'yesterday'
-  if (days < 30) return `${days}d ago`
-  return `${Math.round(days / 30)}mo ago`
-}
-
 export function LeadsConsole({
   filters,
   listing,
@@ -70,6 +70,11 @@ export function LeadsConsole({
   const [undo, setUndo] = useState<{ ids: string[]; count: number } | null>(null)
   /** True once "select all matching" has widened the selection past this page. */
   const [wholeFilter, setWholeFilter] = useState(false)
+  /** Where the keyboard is in the table. -1 is nowhere, which is where it starts. */
+  const [cursor, setCursor] = useState(-1)
+  /** Owned here rather than in the views bar, because `s` is what opens it. */
+  const [naming, setNaming] = useState(false)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const query = toSearchParams(filters).toString()
 
@@ -87,6 +92,8 @@ export function LeadsConsole({
     setLastQuery(query)
     setSelected(new Set())
     setWholeFilter(false)
+    // The cursor is a position in a list of rows. A new question is a new list.
+    setCursor(-1)
   }
 
   const navigate = useCallback(
@@ -223,6 +230,40 @@ export function LeadsConsole({
     return () => clearInterval(timer)
   }, [pendingAudits, router])
 
+  /*
+   * The keyboard for this surface.
+   *
+   * `s` saves what a library surface has to save — the question itself, as a
+   * view. There is no other save here: a lead is saved on the feed and worked
+   * on its own page, and binding `s` to a bulk status change would be a
+   * destructive action one keystroke away from a movement key.
+   */
+  const canSaveView =
+    activeFilterCount(filters) > 0 && !views.some((view) => sameFilters(view.filters, filters))
+
+  useListKeys({
+    count: listing.rows.length,
+    cursor,
+    onCursor: setCursor,
+    onOpen: (index) => router.push(`/leads/${listing.rows[index].id}`),
+    onSave: () => {
+      if (canSaveView) setNaming(true)
+    },
+    onSearch: () => {
+      searchRef.current?.focus()
+      searchRef.current?.select()
+    },
+    onEscape: () => {
+      // The most recent thing first: a widened selection, then the ticks, then
+      // the cursor. Escape should undo one decision, not the whole session.
+      if (naming) setNaming(false)
+      else if (wholeFilter || selected.size) {
+        setSelected(new Set())
+        setWholeFilter(false)
+      } else setCursor(-1)
+    },
+  })
+
   const oldest = useMemo(() => {
     if (!listing.rows.length) return null
     return listing.rows.reduce(
@@ -247,9 +288,16 @@ export function LeadsConsole({
         filters={filters}
         onApply={(next) => navigate({ ...next, page: 1 })}
         onChanged={() => router.refresh()}
+        naming={naming}
+        onNaming={setNaming}
       />
 
-      <FilterBar filters={filters} facets={facets} onChange={onFilterChange} />
+      <FilterBar
+        filters={filters}
+        facets={facets}
+        onChange={onFilterChange}
+        inputRef={searchRef}
+      />
 
       <StatusStrip provenance="book" detail={detail}>
         {pendingAudits > 0 ? (
@@ -259,13 +307,17 @@ export function LeadsConsole({
           </span>
         ) : null}
 
+        <span className="hidden font-data text-micro text-ink-faint xl:inline">
+          j/k move · ⏎ open · s save view · / search
+        </span>
+
         {/* Principle 5: the Google-sourced columns on these rows state their age. */}
         {oldest ? (
           <span
             className="hidden font-data text-micro text-ink-faint lg:inline"
             title="Age of the oldest Google snapshot on this page"
           >
-            snapshot {age(oldest)}
+            snapshot {ago(oldest)}
           </span>
         ) : null}
 
@@ -370,6 +422,8 @@ export function LeadsConsole({
             sort={filters.sort}
             desc={filters.desc}
             onSort={onSort}
+            cursor={cursor}
+            onCursor={setCursor}
           />
 
           {pages > 1 ? (

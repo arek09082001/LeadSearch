@@ -100,11 +100,14 @@ export function FilterBar({
   filters,
   facets,
   onChange,
+  inputRef,
 }: {
   filters: LeadFilters
   facets: LeadFacets
   /** Patches the filter set. Page always resets — a filter change is a new question. */
   onChange: (patch: Partial<LeadFilters>) => void
+  /** Held by the console so `/` can put the caret here from anywhere. */
+  inputRef?: React.RefObject<HTMLInputElement | null>
 }) {
   const [query, setQuery] = useState(filters.q)
 
@@ -139,6 +142,7 @@ export function FilterBar({
       <div className="relative min-w-[10rem] flex-1 md:max-w-xs">
         <IconSearch className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint" />
         <input
+          ref={inputRef}
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -260,12 +264,13 @@ export function FilterBar({
               />
             </div>
             {/*
-              Said plainly rather than discovered: nothing scores leads yet, so
-              a range filter would silently empty the table and look broken.
+              A lead is scored once it has been audited, so a range still
+              excludes anything the audit pass has not reached. Saying that is
+              the difference between an empty table and a broken filter.
             */}
             <p className="mt-2 text-sm text-ink-faint">
-              Leads are unscored until the scoring criteria are decided. This
-              filter will exclude everything until then.
+              Leads are scored after their first audit. A range excludes anything
+              not yet scored.
             </p>
           </div>
         )}
