@@ -131,6 +131,13 @@ create index leads_imprint_email_idx
 -- Dropped and recreated rather than replaced: Postgres cannot add a column to
 -- the middle of a view in place, and a recreated view does not inherit its
 -- grants — hence the revoke at the bottom, which is not optional.
+--
+-- It also restates l.lat and l.lng, and the comment on lat, which belong to
+-- 20260731130000_leads_geo.sql. Not duplication by accident: two migrations
+-- rebuilding one view means the LAST one to run defines it, and a definition
+-- that forgot the map's coordinates would take the map offline. Whoever adds
+-- the next column to this view inherits the same obligation — copy the current
+-- definition forward whole, never the one you remember.
 -- ---------------------------------------------------------------------------
 drop view public.leads_library;
 
@@ -145,6 +152,8 @@ select
   l.region,
   l.postal_code,
   l.country_code,
+  l.lat,
+  l.lng,
   l.phone,
   l.website,
   l.rating,
@@ -219,11 +228,13 @@ from public.leads l
   ) n on true;
 
 comment on view public.leads_library is
-  'Read model for the leads list: lead plus its newest audit measurements, its newest change set and its list membership, so every filter is a predicate on one relation.';
+  'Read model for the leads list AND the map: lead plus its newest audit measurements, its newest change set and its list membership, so every filter is a predicate on one relation and both surfaces agree on which leads exist.';
 comment on column public.leads_library.audit_flags is
   'Every audit filter as one array: failed finding codes, or [never_audited] when the lead has no audit. Match with overlap.';
 comment on column public.leads_library.change_flags is
   'The newest change set from the refresh pass, as codes. Empty when nothing has changed since the lead was saved.';
+comment on column public.leads_library.lat is
+  'Latitude from the Google snapshot, qualified by fetched_at like every other Google-sourced column. Null when Google gave no location — such a lead is in the book and off the map.';
 comment on column public.leads_library.imprint_email is
   'The company email from the Impressum, carried so that "everyone I can write to" is a predicate here rather than a second query.';
 

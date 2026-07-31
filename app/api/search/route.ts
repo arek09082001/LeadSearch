@@ -45,16 +45,56 @@ function parseInput(body: unknown): SearchInput | { error: string } {
     return { error: `Radius must be between 1 and ${MAX_RADIUS_M} metres.` }
   }
 
+  const center = parseCenter(raw.center)
+  if (center && 'error' in center) return center
+
+  /*
+   * A centre with no radius is refused rather than accepted and ignored.
+   *
+   * The search form already drops a radius that has no location to centre on,
+   * saying so in a disabled control instead of sending a number nothing will
+   * read. This is the same rule from the other end: a point the provider would
+   * never look at is a click the operator made and the search silently threw
+   * away — and he would have paid for the unbiased search that came back.
+   */
+  if (center && !(raw.radiusM != null && Number.isFinite(radiusM) && radiusM > 0)) {
+    return { error: 'A point needs a radius to search within.' }
+  }
+
   const maxResults = Number(raw.maxResults)
 
   return {
     query,
     location: location || undefined,
+    center: center ?? undefined,
     category,
     radiusM: raw.radiusM != null ? radiusM : undefined,
     maxResults: Number.isFinite(maxResults) && maxResults > 0 ? maxResults : undefined,
     refresh: raw.refresh === true,
   }
+}
+
+/**
+ * A centre handed in instead of typed — a point clicked on the map.
+ *
+ * Numbers, strictly: `Number("")` and `Number(null)` are both 0, which is a
+ * real coordinate in the Gulf of Guinea, and a search centred there because a
+ * field arrived empty is a search bought for nothing.
+ */
+function parseCenter(
+  value: unknown,
+): { lat: number; lng: number } | { error: string } | null {
+  if (value === undefined || value === null) return null
+  if (typeof value !== 'object') return { error: 'center must be an object with lat and lng.' }
+
+  const { lat, lng } = value as { lat?: unknown; lng?: unknown }
+  const ok = (n: unknown, limit: number) =>
+    typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= limit
+
+  if (!ok(lat, 90) || !ok(lng, 180)) {
+    return { error: 'center must be a point on Earth: lat between -90 and 90, lng between -180 and 180.' }
+  }
+  return { lat: lat as number, lng: lng as number }
 }
 
 export async function POST(request: Request) {
