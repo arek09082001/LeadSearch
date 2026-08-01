@@ -198,6 +198,15 @@ for (const testCase of CASES) {
   console.log(`\n  AFTER    ${summary.body}`)
   console.log(`  STATUS   ${summary.suggestedStatus ?? '(no change suggested)'}`)
   console.log(`  NEXT     ${summary.suggestedNextAction ?? '(nothing)'}`)
+  // Days rather than a date, and that is the thing to check here: nothing behind
+  // the boundary reads a clock. The store resolves it against `calls.ended_at`.
+  console.log(
+    `  BACK IN  ${
+      summary.suggestedFollowUpDays === null
+        ? '(nothing agreed)'
+        : `${summary.suggestedFollowUpDays} days`
+    }`,
+  )
 }
 
 /* ------------------------------------------------------------------------- *

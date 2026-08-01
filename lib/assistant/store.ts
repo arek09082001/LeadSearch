@@ -5,8 +5,10 @@ import type {
   BriefingReview,
   Speaker,
   StoredBriefing,
+  StoredSummary,
   TranscriptSegment,
 } from '@/lib/assistant/types'
+import type { LeadStatus } from '@/lib/leads/types'
 import type { ProviderReview } from '@/lib/providers/types'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -350,9 +352,10 @@ export async function setConsentNoted(callId: string, noted: boolean): Promise<v
 /**
  * Close the attempt.
  *
- * `status_after` is deliberately not written here. The lead's status is moved on
- * the lead page, by the operator, after the call — and stamping it at hang-up
- * would record where the lead stood before he had decided anything.
+ * `status_after` is deliberately not written here, and `stampHandover` below is
+ * the other half of that sentence: the lead's status is moved by the operator
+ * AFTER the call, so stamping it at hang-up would record where the lead stood
+ * before he had decided anything.
  *
  * Idempotent by omission: a second stop on a closed call leaves the first
  * `ended_at` alone. The first one is when he stopped listening; the second is
@@ -379,6 +382,39 @@ export async function endCall(callId: string, outcome: string | null): Promise<C
 
   if (error) throw new Error(`Could not close the call: ${error.message}`)
   return toCall(data as unknown as RawCall)
+}
+
+/**
+ * What the call turned out to be, written when the operator says so.
+ *
+ * THE TWO COLUMNS THAT HAVE BEEN SITTING EMPTY. `status_before` is stamped by
+ * `startCall`, because where the lead stood is knowable the moment he decides to
+ * ring. The other two are not knowable then and are only knowable here: how the
+ * call ended is his shorthand, and where the lead went is a move he makes with a
+ * press, minutes after hanging up. Together the three make a call row answer the
+ * question the whole apparatus exists for — which conversation moved which lead
+ * where — and until something wrote them, `call_tips.acted_on` had a numerator
+ * with no denominator to divide into.
+ *
+ * ONE-WAY, LIKE `markTipActedOn`. Both fields are only ever set, never cleared:
+ * a status the operator moved to and then moved away from is still where this
+ * call put it, and blanking the column would rewrite the history rather than
+ * extend it. An omitted field is left alone, so taking a status and then filing
+ * an outcome is two presses against one row without either undoing the other.
+ */
+export async function stampHandover(
+  callId: string,
+  handover: { outcome?: string | null; statusAfter?: LeadStatus },
+): Promise<void> {
+  const patch: Record<string, unknown> = {}
+  if (handover.outcome) patch.outcome = handover.outcome
+  if (handover.statusAfter) patch.status_after = handover.statusAfter
+  if (!Object.keys(patch).length) return
+
+  const supabase = createServiceClient()
+
+  const { error } = await supabase.from('calls').update(patch).eq('id', callId)
+  if (error) throw new Error(`Could not record how the call ended: ${error.message}`)
 }
 
 /* ------------------------------------------------------------------------- *
@@ -710,4 +746,148 @@ export async function writeBriefing(write: BriefingWrite): Promise<StoredBriefin
   const stored = toStored(data as unknown as BriefingRow, write.diagnosisAsOf)
   if (!stored) throw new Error('The briefing was saved but could not be read back.')
   return stored
+}
+
+/* ------------------------------------------------------------------------- *
+ * Summaries
+ * ------------------------------------------------------------------------- */
+
+/*
+ * COLUMNS, NOT JSONB, and the difference from `call_briefings` above is worth
+ * stating because the two tables sit beside each other and disagree.
+ *
+ * A briefing is a document whose shape will change, so it is stored whole and
+ * read back defensively. A summary is a paragraph plus three suggestions, and
+ * two of the three are things the operator ACTS on — a status he can be moved
+ * to, a day that can be put in his follow-up queue. Those have to be typed by
+ * the database, because the moment they are jsonb the surface is offering to
+ * write `leads.status` from a string nothing checked.
+ */
+
+interface SummaryRow {
+  id: string
+  call_id: string
+  created_at: string
+  provider: string
+  model: string | null
+  body: string
+  suggested_status: LeadStatus | null
+  suggested_next_action: string | null
+  suggested_follow_up_at: string | null
+  accepted: boolean | null
+}
+
+const SUMMARY_COLUMNS =
+  'id, call_id, created_at, provider, model, body, suggested_status, suggested_next_action, suggested_follow_up_at, accepted'
+
+function toSummary(row: SummaryRow): StoredSummary {
+  return {
+    id: row.id,
+    callId: row.call_id,
+    generatedAt: row.created_at,
+    provider: row.provider,
+    model: row.model,
+    body: row.body,
+    suggestedStatus: row.suggested_status,
+    suggestedNextAction: row.suggested_next_action,
+    suggestedFollowUpAt: row.suggested_follow_up_at,
+    accepted: row.accepted,
+  }
+}
+
+/**
+ * The newest summary on a call, or null when none has been written.
+ *
+ * Newest rather than only: `call_summaries` allows several rows per call for the
+ * reason `call_briefings` does — a summary can be written again when the first
+ * one missed the point, and the earlier one is still the record of what the
+ * assistant said the first time. The index is already ordered for this.
+ */
+export async function readLatestSummary(callId: string): Promise<StoredSummary | null> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_summaries')
+    .select(SUMMARY_COLUMNS)
+    .eq('call_id', callId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(`Could not read the summary: ${error.message}`)
+  return data ? toSummary(data as unknown as SummaryRow) : null
+}
+
+export interface SummaryWrite {
+  callId: string
+  provider: string
+  model: string | null
+  body: string
+  suggestedStatus: LeadStatus | null
+  suggestedNextAction: string | null
+  /** Already resolved to a day. See the column comment for why not an offset. */
+  suggestedFollowUpAt: string | null
+}
+
+/**
+ * Write the summary. `accepted` is left null on purpose.
+ *
+ * Null is the state that says the operator has not looked yet, and it is the
+ * only one of the three that this function is entitled to leave behind — the
+ * other two are his verdict and are written by `markSummaryAccepted` when he
+ * gives it. Defaulting to false here would file every summary written on a busy
+ * afternoon as a rejection.
+ */
+export async function writeSummary(write: SummaryWrite): Promise<StoredSummary> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_summaries')
+    .insert({
+      call_id: write.callId,
+      provider: write.provider,
+      model: write.model,
+      body: write.body,
+      suggested_status: write.suggestedStatus,
+      suggested_next_action: write.suggestedNextAction,
+      suggested_follow_up_at: write.suggestedFollowUpAt,
+    })
+    .select(SUMMARY_COLUMNS)
+    .single()
+
+  if (error) throw new Error(`Could not save the summary: ${error.message}`)
+  return toSummary(data as unknown as SummaryRow)
+}
+
+/**
+ * The operator's verdict on the suggestions.
+ *
+ * The column this table is eventually for, in the same sense `call_tips.acted_on`
+ * is: `body` is what he reads, and `accepted` is the only thing here that can
+ * answer whether reading it was worth the model's time. True the first time he
+ * takes any part of it; false when he looks and takes nothing.
+ *
+ * NOT ONE-WAY, unlike the tip. A summary sits on screen with three separate
+ * things to take, so "I want none of this" and then "actually, the date" is an
+ * ordinary sequence of two presses rather than a contradiction — and the second
+ * press has to be able to correct the first.
+ *
+ * Scoped by call as well as by id, for the reason `markTipActedOn` is: the id
+ * comes back from a browser that may be looking at a conversation that ended an
+ * hour ago.
+ */
+export async function markSummaryAccepted(
+  callId: string,
+  summaryId: string,
+  accepted: boolean,
+): Promise<void> {
+  const supabase = createServiceClient()
+
+  const { error } = await supabase
+    .from('call_summaries')
+    .update({ accepted })
+    .eq('id', summaryId)
+    .eq('call_id', callId)
+
+  if (error) throw new Error(`Could not record what you took: ${error.message}`)
 }

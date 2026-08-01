@@ -117,5 +117,10 @@ export const NOTHING_FOUND: AssistantFixture = {
       'Well reviewed, no evident problem with the site. Nothing agreed; no reason to push.',
     suggestedStatus: 'contacted',
     suggestedNextAction: null,
+    // Null, and it is the point of this fixture rather than a gap in it. Nothing
+    // was agreed, so there is no day to propose — and a surface that offered one
+    // anyway would be putting a callback in the queue that the business never
+    // heard about.
+    suggestedFollowUpDays: null,
   },
 }

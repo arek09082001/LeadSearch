@@ -142,5 +142,6 @@ export const DATED_SITE: AssistantFixture = {
       'An outside contact built it originally and is no longer in touch. Agreed to look at a written report before anything else.',
     suggestedStatus: 'contacted',
     suggestedNextAction: 'Send the PageSpeed report with the mobile screenshot, then call back in three days.',
+    suggestedFollowUpDays: 3,
   },
 }

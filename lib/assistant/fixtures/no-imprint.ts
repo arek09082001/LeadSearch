@@ -135,5 +135,8 @@ export const NO_IMPRINT: AssistantFixture = {
       'The site is maintained by an outside contact, so the summary goes to both.',
     suggestedStatus: 'contacted',
     suggestedNextAction: 'Email the two missing pages in writing, copy the maintainer, call back Thursday.',
+    // Three days. "Thursday" is the sentence he will say; the offset is what a
+    // date field can be filled from, and the two have to mean the same thing.
+    suggestedFollowUpDays: 3,
   },
 }

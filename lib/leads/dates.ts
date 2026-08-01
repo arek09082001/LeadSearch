@@ -126,6 +126,24 @@ export function today(offsetDays = 0): string {
   return offsetDays === 0 ? now : fromUtcMidnight(utcMidnight(now) + offsetDays * 86_400_000)
 }
 
+/**
+ * A plain date `days` after an INSTANT THAT IS NOT NOW.
+ *
+ * The one date function here that does not start from the clock, and it exists
+ * for the one case where starting from the clock would be wrong: a callback
+ * agreed on the phone is measured from the end of that call. `today(3)` is the
+ * right answer while the operator is still holding the receiver and the wrong
+ * one the moment he writes the summary up the following morning — the day would
+ * slide forward with him, and the business would be rung on a day nobody named.
+ *
+ * The instant is reduced to a calendar day in the operator's zone first, exactly
+ * as `dayGap` does, so a call that ended at 23:50 counts from that day and not
+ * from the UTC tomorrow the server thinks it was.
+ */
+export function dateFrom(instant: string, days: number): string {
+  return fromUtcMidnight(utcMidnight(iso(wall(new Date(instant)))) + days * 86_400_000)
+}
+
 function daysInMonth(year: number, month: number): number {
   // Day 0 of the next month is the last day of this one. Read in UTC so the
   // host's zone cannot shift it across a boundary.
