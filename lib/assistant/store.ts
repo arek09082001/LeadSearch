@@ -1,6 +1,12 @@
 import 'server-only'
 
-import type { Briefing, BriefingReview, StoredBriefing } from '@/lib/assistant/types'
+import type {
+  Briefing,
+  BriefingReview,
+  Speaker,
+  StoredBriefing,
+  TranscriptSegment,
+} from '@/lib/assistant/types'
 import type { ProviderReview } from '@/lib/providers/types'
 import { createServiceClient } from '@/lib/supabase/server'
 
@@ -209,6 +215,57 @@ export async function startCall(
   return { id: data.id, startedAt: data.started_at }
 }
 
+/**
+ * One call, as the assistant surface needs it.
+ *
+ * Deliberately not joined to the lead here. `readLead` already knows how to read
+ * a lead and is the only place that should, and a second projection of the same
+ * row is the thing that eventually disagrees with the first.
+ */
+export interface CallRow {
+  id: string
+  leadId: string
+  startedAt: string
+  endedAt: string | null
+  consentNoted: boolean
+  outcome: string | null
+}
+
+const CALL_COLUMNS = 'id, lead_id, started_at, ended_at, consent_noted, outcome'
+
+interface RawCall {
+  id: string
+  lead_id: string
+  started_at: string
+  ended_at: string | null
+  consent_noted: boolean
+  outcome: string | null
+}
+
+function toCall(row: RawCall): CallRow {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    consentNoted: row.consent_noted,
+    outcome: row.outcome,
+  }
+}
+
+export async function readCall(callId: string): Promise<CallRow | null> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('calls')
+    .select(CALL_COLUMNS)
+    .eq('id', callId)
+    .maybeSingle()
+
+  if (error) throw new Error(`Could not read the call: ${error.message}`)
+  return data ? toCall(data as unknown as RawCall) : null
+}
+
 /** Finished attempts before this one, newest first. Feeds `BriefingHistory`. */
 export async function readPreviousCalls(
   leadId: string,
@@ -232,6 +289,153 @@ export async function readPreviousCalls(
     endedAt: row.ended_at,
     outcome: row.outcome,
   }))
+}
+
+/**
+ * Mark the moment the line actually opened, and return the timeline's zero.
+ *
+ * THE ONE COLUMN THIS FILE REWRITES, and the reason is arithmetic rather than
+ * taste. `startCall` stamps `started_at` when the operator presses Prepare —
+ * the moment he decided to ring — and he then reads the briefing for a minute
+ * before he dials. But `at_ms` is defined as milliseconds from `started_at`, so
+ * leaving that stamp where prepare put it would file every segment of the call a
+ * minute later than it was said, against a zero that is not the start of
+ * anything. The migration's own words are that a call is a timeline of its own;
+ * this is what makes that true.
+ *
+ * GUARDED TWICE, because rewriting a timestamp is not a thing to do casually.
+ * A call with segments already stored has a timeline that other rows are
+ * measured against, and moving its origin would silently shift all of them — so
+ * the second press returns the existing zero and changes nothing. A closed call
+ * refuses outright.
+ */
+export async function markListening(
+  callId: string,
+): Promise<{ startedAt: string; restamped: boolean }> {
+  const supabase = createServiceClient()
+
+  const call = await readCall(callId)
+  if (!call) throw new Error('That call is not in the book.')
+  if (call.endedAt) throw new Error('That call has already been closed off.')
+
+  const { count, error: countError } = await supabase
+    .from('call_transcript_segments')
+    .select('id', { count: 'exact', head: true })
+    .eq('call_id', callId)
+
+  if (countError) throw new Error(`Could not check the transcript: ${countError.message}`)
+
+  // Resuming after a reload or a second press. The zero is already load-bearing.
+  if (count && count > 0) return { startedAt: call.startedAt, restamped: false }
+
+  const startedAt = new Date().toISOString()
+  const { error } = await supabase.from('calls').update({ started_at: startedAt }).eq('id', callId)
+  if (error) throw new Error(`Could not open the line: ${error.message}`)
+
+  return { startedAt, restamped: true }
+}
+
+/** Whether consent was stated, as the operator reports it. Never inferred. */
+export async function setConsentNoted(callId: string, noted: boolean): Promise<void> {
+  const supabase = createServiceClient()
+
+  const { error } = await supabase
+    .from('calls')
+    .update({ consent_noted: noted })
+    .eq('id', callId)
+
+  if (error) throw new Error(`Could not record the consent note: ${error.message}`)
+}
+
+/**
+ * Close the attempt.
+ *
+ * `status_after` is deliberately not written here. The lead's status is moved on
+ * the lead page, by the operator, after the call — and stamping it at hang-up
+ * would record where the lead stood before he had decided anything.
+ *
+ * Idempotent by omission: a second stop on a closed call leaves the first
+ * `ended_at` alone. The first one is when he stopped listening; the second is
+ * usually a double-click or a reloaded tab.
+ */
+export async function endCall(callId: string, outcome: string | null): Promise<CallRow> {
+  const supabase = createServiceClient()
+
+  const call = await readCall(callId)
+  if (!call) throw new Error('That call is not in the book.')
+
+  const patch: Record<string, unknown> = {}
+  if (!call.endedAt) patch.ended_at = new Date().toISOString()
+  if (outcome !== null) patch.outcome = outcome
+
+  if (!Object.keys(patch).length) return call
+
+  const { data, error } = await supabase
+    .from('calls')
+    .update(patch)
+    .eq('id', callId)
+    .select(CALL_COLUMNS)
+    .single()
+
+  if (error) throw new Error(`Could not close the call: ${error.message}`)
+  return toCall(data as unknown as RawCall)
+}
+
+/* ------------------------------------------------------------------------- *
+ * Transcript segments
+ * ------------------------------------------------------------------------- */
+
+export async function readSegments(callId: string): Promise<TranscriptSegment[]> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_transcript_segments')
+    .select('at_ms, speaker, text')
+    .eq('call_id', callId)
+    .order('at_ms', { ascending: true })
+
+  if (error) throw new Error(`Could not read the transcript: ${error.message}`)
+
+  return ((data ?? []) as { at_ms: number; speaker: Speaker; text: string }[]).map((row) => ({
+    atMs: row.at_ms,
+    speaker: row.speaker,
+    text: row.text,
+  }))
+}
+
+/**
+ * Append recognised speech. Called every few seconds, all call long.
+ *
+ * WRITTEN DURING THE CALL RATHER THAN AT THE END OF IT, which is the only
+ * decision here. A transcript held in a tab until hang-up is a transcript that a
+ * crashed browser, a closed laptop or a misjudged reload destroys completely —
+ * and it is destroyed at the moment it is most valuable, because the call it
+ * recorded is the one that just went well. The cost is a small insert every few
+ * seconds against a table that expires in fourteen days.
+ *
+ * `expires_at` is left to the column default on purpose. The retention window
+ * belongs to the schema, and a caller that could set it is a caller that could
+ * quietly extend it.
+ */
+export async function appendSegments(
+  callId: string,
+  segments: readonly TranscriptSegment[],
+): Promise<number> {
+  if (!segments.length) return 0
+
+  const supabase = createServiceClient()
+
+  const { error } = await supabase.from('call_transcript_segments').insert(
+    segments.map((segment) => ({
+      call_id: callId,
+      at_ms: segment.atMs,
+      speaker: segment.speaker,
+      text: segment.text,
+    })),
+  )
+
+  if (error) throw new Error(`Could not save the transcript: ${error.message}`)
+  return segments.length
 }
 
 /* ------------------------------------------------------------------------- *

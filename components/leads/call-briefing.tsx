@@ -1,3 +1,5 @@
+import Link from 'next/link'
+
 import { PrintBriefing } from '@/components/leads/prepare-call'
 import type { StoredBriefing } from '@/lib/assistant/types'
 import { fullDate, shortDate } from '@/lib/leads/dates'
@@ -61,6 +63,18 @@ export function CallBriefing({ briefing }: { briefing: StoredBriefing }) {
         <div className="flex items-baseline gap-3">
           <Provenance briefing={briefing} />
           <PrintBriefing />
+          {/*
+            The way through to the assistant view. The briefing already knows
+            which call it belongs to, so the link costs nothing and is the only
+            place it can honestly go: the call surface is this sheet with a
+            transcript running beside it.
+          */}
+          <Link
+            href={`/calls/${briefing.callId}`}
+            className="label text-ink-faint transition-colors hover:text-signal print:hidden"
+          >
+            Open call
+          </Link>
         </div>
       </div>
 
