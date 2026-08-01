@@ -1022,3 +1022,53 @@ export async function markSummaryAccepted(
 
   if (error) throw new Error(`Could not record what you took: ${error.message}`)
 }
+
+/* ------------------------------------------------------------------------- *
+ * What the call cost
+ * ------------------------------------------------------------------------- */
+
+/** One call's share of the ledger. Zero is a real answer and the usual one. */
+export interface CallCost {
+  billedUsd: number
+  /** Ledger rows, not model requests: a request bills input and output apart. */
+  entries: number
+}
+
+/**
+ * What was spent on this call, from the ledger and nothing else.
+ *
+ * READ RATHER THAN ACCUMULATED, for the reason `lib/search/cost.ts` gives about
+ * every other figure in this app: `api_usage` is the only source of truth for
+ * spend, and a total the surface kept for itself would be a second one that
+ * eventually disagrees.
+ *
+ * ZERO IS THE ORDINARY ANSWER and is not the same as "not measured". A call
+ * briefed from fixtures costs nothing, a call prepared before the assistant had
+ * a bill costs nothing, and a call whose reviews came from cache costs nothing.
+ * The figure is honest in all three cases, which is why it is a number rather
+ * than a nullable one.
+ *
+ * A FAILED READ IS NOT AN ERROR HERE. This is a line on a screen the operator is
+ * using to make a phone call; losing it must not lose him the page. It comes
+ * back as zero and says so in the log.
+ */
+export async function readCallCost(callId: string): Promise<CallCost> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('api_usage')
+    .select('billed_amount_usd')
+    .eq('call_id', callId)
+
+  if (error) {
+    console.error('[assistant] could not read what the call cost', { callId, error: error.message })
+    return { billedUsd: 0, entries: 0 }
+  }
+
+  const rows = (data ?? []) as { billed_amount_usd: number }[]
+
+  return {
+    billedUsd: rows.reduce((sum, row) => sum + Number(row.billed_amount_usd), 0),
+    entries: rows.length,
+  }
+}

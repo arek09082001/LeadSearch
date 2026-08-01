@@ -7,10 +7,12 @@ import { CommandButton } from '@/components/ui/command-button'
 import type { BudgetState } from '@/lib/search/types'
 
 /*
- * What this is costing, in three figures that never move around.
+ * What this is costing, in figures that never move around.
  *
  *   THIS SEARCH   what the run in progress has spent
- *   MONTH         billed spend against the ceiling
+ *   MONTH         billed spend, everything, the whole bill
+ *   GOOGLE        the provider half, against the ceiling that bounds it
+ *   ASSISTANT     the model half, against the ceiling that bounds that
  *   FREE LEFT     calls still inside Google's monthly allowance
  *
  * A ruled strip of labelled figures, not stat tiles: this is a readout on an
@@ -18,9 +20,20 @@ import type { BudgetState } from '@/lib/search/types'
  * operator is reading rows. Every number is `data` so the columns hold still as
  * the digits change.
  *
- * The third figure is the one that matters most on a $0 ceiling, which is the
- * default: the operator is spending an allowance, not money, and needs to see
- * it draining before it stops him mid-session.
+ * MONTH IS THE WHOLE BILL AND THE TWO BELOW IT ARE ITS HALVES. That split is not
+ * decoration: the ceilings are disjoint — Google's spend cannot refuse a
+ * briefing and a month of briefings cannot refuse a search — so a single figure
+ * shown against a single ceiling would be wrong in whichever direction was
+ * worse. The total is what the invoice will say; each half is what its own
+ * ceiling is actually measuring.
+ *
+ * ASSISTANT IS HIDDEN UNTIL IT HAS SOMETHING TO SAY. With `ASSISTANT_PROVIDER`
+ * unset the assistant answers from fixtures and costs nothing, which is the
+ * ordinary state and does not deserve a permanent zero on the instrument.
+ *
+ * FREE LEFT is the figure that matters most on a $0 Google ceiling, which is the
+ * default: the operator is spending an allowance, not money, and needs to see it
+ * draining before it stops him mid-session.
  */
 
 function usd(amount: number): string {
@@ -72,10 +85,32 @@ export function CostReadout({
   estimateUsd: number | null
   onCeilingChange: (budget: BudgetState) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(String(budget.ceilingUsd))
+  /*
+   * Which ceiling is being edited, or none. A single editor bound to a field
+   * rather than two of them: they are the same press with a different target,
+   * and two inputs open at once would invite the operator to think one Set
+   * saves both. It does not — see the budget route.
+   */
+  const [editing, setEditing] = useState<null | 'monthlyCeilingUsd' | 'assistantCeilingUsd'>(null)
+  const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  /** True when the assistant is costing money, or has been told it may. */
+  const assistantInPlay = budget.assistantCeilingUsd > 0 || budget.assistantMonthToDateUsd > 0
+
+  function open(field: 'monthlyCeilingUsd' | 'assistantCeilingUsd') {
+    setDraft(
+      String(field === 'monthlyCeilingUsd' ? budget.ceilingUsd : budget.assistantCeilingUsd),
+    )
+    setError(null)
+    setEditing(field)
+  }
+
+  function close() {
+    setEditing(null)
+    setError(null)
+  }
 
   /*
    * The allowance a search actually draws from — named by the server, not
@@ -92,13 +127,16 @@ export function CostReadout({
       .sort((a, b) => (a.freeUnitsRemaining ?? 0) - (b.freeUnitsRemaining ?? 0))[0]
 
   async function save() {
+    if (!editing) return
+
     setSaving(true)
     setError(null)
     try {
       const response = await fetch('/api/budget', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ monthlyCeilingUsd: Number(draft) }),
+        // One field per request, named. The route leaves the other alone.
+        body: JSON.stringify({ [editing]: Number(draft) }),
       })
       const body = await response.json()
       if (!response.ok) {
@@ -106,7 +144,7 @@ export function CostReadout({
         return
       }
       onCeilingChange(body as BudgetState)
-      setEditing(false)
+      setEditing(null)
     } catch {
       setError('Could not reach the server.')
     } finally {
@@ -140,10 +178,32 @@ export function CostReadout({
 
       <Figure
         label={`Month ${budget.month}`}
-        value={`${usd(budget.monthToDateUsd)} / ${usd(budget.ceilingUsd)}`}
-        tone={budget.exhausted ? 'alert' : budget.monthToDateUsd > 0 ? 'ink' : 'dim'}
-        title={`List value of this month's calls before the free allowance: ${usd(budget.monthToDateListUsd)}`}
+        value={usd(budget.monthToDateUsd)}
+        tone={budget.monthToDateUsd > 0 ? 'ink' : 'dim'}
+        title={`Everything billed this month, Google and models both. List value before the free allowance: ${usd(budget.monthToDateListUsd)}`}
       />
+
+      <Figure
+        label="Google"
+        value={`${usd(budget.providerMonthToDateUsd)} / ${usd(budget.ceilingUsd)}`}
+        tone={budget.exhausted ? 'alert' : budget.providerMonthToDateUsd > 0 ? 'ink' : 'dim'}
+        title="Provider spend against the ceiling that bounds it. Model spend is counted separately and cannot exhaust this."
+      />
+
+      {assistantInPlay ? (
+        <Figure
+          label="Assistant"
+          value={`${usd(budget.assistantMonthToDateUsd)} / ${usd(budget.assistantCeilingUsd)}`}
+          tone={
+            budget.assistantExhausted
+              ? 'alert'
+              : budget.assistantMonthToDateUsd > 0
+                ? 'ink'
+                : 'dim'
+          }
+          title="What the model-backed assistant has cost this month — briefings, tips and summaries — against its own ceiling."
+        />
+      ) : null}
 
       {allowance && allowance.freeUnitsRemaining !== null ? (
         <Figure
@@ -164,7 +224,9 @@ export function CostReadout({
         {editing ? (
           <>
             <label className="flex items-center gap-1.5">
-              <span className="label text-ink-faint">Ceiling&nbsp;$</span>
+              <span className="label text-ink-faint">
+                {editing === 'monthlyCeilingUsd' ? 'Google' : 'Assistant'}&nbsp;$
+              </span>
               <input
                 type="number"
                 min={0}
@@ -178,10 +240,7 @@ export function CostReadout({
                     event.preventDefault()
                     void save()
                   }
-                  if (event.key === 'Escape') {
-                    setEditing(false)
-                    setDraft(String(budget.ceilingUsd))
-                  }
+                  if (event.key === 'Escape') close()
                 }}
                 className="w-20 border border-rule bg-ground px-1.5 py-1 text-right font-data text-sm text-ink outline-none focus:border-signal"
               />
@@ -189,28 +248,31 @@ export function CostReadout({
             <CommandButton type="button" variant="primary" onClick={save} disabled={saving}>
               {saving ? 'Saving' : 'Set'}
             </CommandButton>
-            <CommandButton
-              type="button"
-              variant="quiet"
-              onClick={() => {
-                setEditing(false)
-                setDraft(String(budget.ceilingUsd))
-                setError(null)
-              }}
-            >
+            <CommandButton type="button" variant="quiet" onClick={close}>
               Cancel
             </CommandButton>
           </>
         ) : (
-          <CommandButton
-            type="button"
-            variant="quiet"
-            onClick={() => setEditing(true)}
-            title="Set the hard monthly spending limit"
-          >
-            <IconCeiling className="size-3.5" />
-            Ceiling
-          </CommandButton>
+          <>
+            <CommandButton
+              type="button"
+              variant="quiet"
+              onClick={() => open('monthlyCeilingUsd')}
+              title="Set the hard monthly limit on Google spend"
+            >
+              <IconCeiling className="size-3.5" />
+              Ceiling
+            </CommandButton>
+            <CommandButton
+              type="button"
+              variant="quiet"
+              onClick={() => open('assistantCeilingUsd')}
+              title="Set the hard monthly limit on model spend. Zero refuses every model call, which is the default."
+            >
+              <IconCeiling className="size-3.5" />
+              Assistant
+            </CommandButton>
+          </>
         )}
       </div>
 

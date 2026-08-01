@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { ANTHROPIC_ASSISTANT } from '@/lib/assistant/anthropic/provider'
 import { MOCK_ASSISTANT } from '@/lib/assistant/mock/provider'
 import { env } from '@/lib/env'
 import type { Assistant } from '@/lib/assistant/types'
@@ -12,12 +13,14 @@ import type { Assistant } from '@/lib/assistant/types'
  * a model, which is the same way `CRON_SECRET` is handled and for the same
  * reason: the expensive behaviour has to be asked for.
  *
- * WHY THIS IS A THUNK TABLE and not the object table `lib/providers/index.ts`
- * uses. The Google registry constructs every provider at import because they are
- * all built and all cheap. Here, exactly one of the two exists: `anthropic` is
- * Phase 17, and a table that had to name a module for it would either import a
- * file that does not exist or ship a stub that could be reached by a typo in an
- * env var. A thunk lets the unbuilt entry be a sentence instead.
+ * STILL A THUNK TABLE now that both entries exist, though the reason has moved.
+ * It was written this way because `anthropic` did not exist and a table that had
+ * to name a module for it would have imported a file that was not there. What
+ * the thunk buys today is smaller and still worth having: both assistants are
+ * shared instances holding no per-request state, and neither construction may
+ * capture a credential. `ANTHROPIC_API_KEY` is read inside `client.ts` at the
+ * moment of a request — see the note in `lib/providers/index.ts` for why a
+ * process that outlives a rotated key must not keep using the old one.
  *
  * Note also what does NOT switch here: the mock is not "development" and the
  * model is not "production". Either can be selected in either, because the point
@@ -30,12 +33,7 @@ export const DEFAULT_ASSISTANT_ID = 'mock'
 const ASSISTANTS: Record<string, () => Assistant> = {
   mock: () => MOCK_ASSISTANT,
 
-  anthropic: () => {
-    throw new Error(
-      'ASSISTANT_PROVIDER is set to "anthropic", but no model-backed assistant has been built yet ' +
-        '(Phase 17). Unset it to use the fixture-backed mock.',
-    )
-  },
+  anthropic: () => ANTHROPIC_ASSISTANT,
 }
 
 /**

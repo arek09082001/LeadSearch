@@ -322,6 +322,19 @@ export interface CallAssistantProps {
   initialSummary: StoredSummary | null
   /** `calls.outcome`, when it has been filed. */
   initialOutcome: string | null
+  /**
+   * What this call has cost so far, billed, from `api_usage`.
+   *
+   * AS OF THE MOMENT THE PAGE RENDERED, and deliberately not live. A figure that
+   * ticked upward during a conversation would be a thing to watch instead of the
+   * person on the phone, and the number that matters is the one he reads
+   * afterwards. It settles on the next load, which on this screen is the reload
+   * after Stop.
+   *
+   * Zero on every call the fixture-backed assistant briefed, which is most of
+   * them, and the readout says nothing at all in that case.
+   */
+  costUsd: number
 }
 
 export function CallAssistant({
@@ -338,6 +351,7 @@ export function CallAssistant({
   initialTips,
   initialSummary,
   initialOutcome,
+  costUsd,
 }: CallAssistantProps) {
   const router = useRouter()
 
@@ -412,6 +426,20 @@ export function CallAssistant({
               <span className="font-data text-base text-ink-ghost">no number</span>
             )}
             {leadCity ? <span>{leadCity}</span> : null}
+            {/*
+             * What this one cost, where he can see it beside the call it was
+             * spent on. Hidden at zero rather than shown as $0.000: with the
+             * fixture-backed assistant every call is free, and a permanent zero
+             * on this band would be a figure he stops reading.
+             */}
+            {costUsd > 0 ? (
+              <span
+                className="font-data text-ink-faint"
+                title="Billed to this call — reviews, and whatever the assistant generated for it. As of when this page loaded."
+              >
+                ${costUsd < 1 ? costUsd.toFixed(3) : costUsd.toFixed(2)}
+              </span>
+            ) : null}
             <CommandLink href={`/leads/${leadId}`} variant="quiet">
               Diagnosis
             </CommandLink>

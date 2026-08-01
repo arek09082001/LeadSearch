@@ -105,7 +105,7 @@ export async function prepareBriefing(
    * request refusable, and a pass that spends first and checks afterwards is a
    * receipt rather than a limit.
    */
-  const guard = await SpendGuard.create()
+  const guard = await SpendGuard.create(null, call.id)
 
   const [reviews, previousCalls] = await Promise.all([
     loadReviews(lead.googlePlaceId, guard),
@@ -141,7 +141,9 @@ export async function prepareBriefing(
   })
 
   const assistant = getAssistant()
-  const briefing = await assistant.briefing.generate(input, { signal })
+  // `callId` so a model-backed provider can file its tokens against the attempt
+  // this briefing was written for. See `AssistantContext`.
+  const briefing = await assistant.briefing.generate(input, { signal, callId: call.id })
 
   const stored = await writeBriefing({
     callId: call.id,

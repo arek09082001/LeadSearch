@@ -5,6 +5,7 @@ import { CallAssistant } from '@/components/calls/call-assistant'
 import { CallBriefing } from '@/components/leads/call-briefing'
 import {
   readCall,
+  readCallCost,
   readLatestBriefing,
   readLatestSummary,
   readSegments,
@@ -71,11 +72,17 @@ export default async function CallPage({ params }: Props) {
    * conversation, each with `accepted` null. Read here, the surface opens on
    * what is already there and only the Stop button produces a new one.
    */
-  const [briefing, segments, tips, summary] = await Promise.all([
+  /*
+   * The cost comes back with the rest of it, and it is a read rather than a
+   * running total for the reason `readCallCost` gives: `api_usage` is the only
+   * source of truth for spend, and it is already open.
+   */
+  const [briefing, segments, tips, summary, cost] = await Promise.all([
     readLatestBriefing(call.id, lead.lastAuditedAt),
     readSegments(call.id),
     readTips(call.id),
     readLatestSummary(call.id),
+    readCallCost(call.id),
   ])
 
   return (
@@ -91,6 +98,7 @@ export default async function CallPage({ params }: Props) {
       initialTips={tips.map((tip) => ({ trigger: tip.trigger, atMs: tip.atMs }))}
       initialSummary={summary}
       initialOutcome={call.outcome}
+      costUsd={cost.billedUsd}
       /*
        * The briefing twice: once as data for the rules, once as markup for the
        * eye. See `CallAssistantProps.prepared` for why neither can stand in for
