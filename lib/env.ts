@@ -25,4 +25,19 @@ export const env = {
   get SUPABASE_SECRET_KEY() {
     return required('SUPABASE_SECRET_KEY', process.env.SUPABASE_SECRET_KEY)
   },
+
+  /**
+   * Which call assistant answers: `mock` or `anthropic`.
+   *
+   * Optional, and it defaults to the one that costs nothing. `monthly_ceiling_usd`
+   * is 0, so an unset variable must not be the path to a billable model — the
+   * expensive behaviour is the one that has to be asked for by name.
+   *
+   * Validated in `lib/assistant/index.ts` rather than here: this file's job is
+   * to say what the environment holds, and the registry is the only thing that
+   * knows which ids exist.
+   */
+  get ASSISTANT_PROVIDER() {
+    return process.env.ASSISTANT_PROVIDER || 'mock'
+  },
 }

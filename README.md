@@ -114,6 +114,25 @@ On Vercel, set it in the project's environment variables; the platform sends it 
 including you — it spends money against the Places API, so an unconfigured deployment fails
 closed.
 
+### 6. The call assistant
+
+`ASSISTANT_PROVIDER` chooses what answers the three assistant interfaces — the briefing
+before a call, the tips during it, the summary after. It defaults to `mock`, which reads
+from the fixtures in `lib/assistant/fixtures/` with 300–800ms of artificial delay so that
+the call surface is built against real latency rather than against a synchronous answer
+that will never exist again. Leave it unset; `monthly_ceiling_usd` is 0 and the default
+must not be the path to a billable model.
+
+`anthropic` is Phase 17 and is not built. Setting it today throws at startup rather than
+falling back, so a deployment that believes it has a model cannot quietly brief from
+fixtures.
+
+Read what the mock would say, without running the app:
+
+```bash
+node scripts/assistant-demo.mjs
+```
+
 ---
 
 ## Migrations
@@ -124,7 +143,7 @@ Everything the product needs is in `supabase/migrations/`, in filename order.
 concatenated in order. Open the Supabase dashboard → SQL Editor → New query, paste the whole
 file, Run. It takes a few seconds.
 
-Enable **pg_cron** first (Database → Extensions), or the four scheduled jobs below never get
+Enable **pg_cron** first (Database → Extensions), or the scheduled jobs below never get
 created. The file asks for the extension itself and asserts at the end that the jobs exist,
 so a missing pg_cron surfaces as an error rather than as a year of data that quietly failed
 to expire.
@@ -151,17 +170,24 @@ select * from public.scheduled_jobs;   -- expect three rows
 
 ### The scheduled jobs
 
-Four things run in the database rather than in the application, because a retention promise
+Five things run in the database rather than in the application, because a retention promise
 that only holds while the app is awake is not a promise:
 
-| Job                     | When (UTC) | What                                                          |
-| ----------------------- | ---------- | ------------------------------------------------------------- |
-| `expire-search-results` | 03:15      | Deletes Google-sourced search results past their retention window |
-| `expire-geocode-cache`  | 03:30      | Drops resolved locations past their cache lifetime            |
-| `purge-deleted-leads`   | 03:45      | Removes soft-deleted leads past the 30-day undo window        |
-| `/api/cron/refresh`     | 04:20      | Re-pulls stale Google data and re-audits on the slow cadence  |
+| Job                        | When (UTC) | What                                                          |
+| -------------------------- | ---------- | ------------------------------------------------------------- |
+| `expire-search-results`    | 03:15      | Deletes Google-sourced search results past their retention window |
+| `expire-geocode-cache`     | 03:30      | Drops resolved locations past their cache lifetime            |
+| `purge-deleted-leads`      | 03:45      | Removes soft-deleted leads past the 30-day undo window        |
+| `expire-call-transcripts`  | 04:00      | Deletes recorded call speech after 14 days. The summary stays  |
+| `/api/cron/refresh`        | 04:20      | Re-pulls stale Google data and re-audits on the slow cadence  |
 
-The first three are `pg_cron` jobs scheduled by the migrations that define them. **They
+`expire-call-transcripts` is the strongest of these promises and the shortest window.
+Google data expires because a licence says it must; a transcript expires because the person
+on the other end of the call never agreed to be recorded by a sales tool. `call_summaries`
+survives, `call_transcript_segments` does not, and after a fortnight the paragraph is the
+whole record of what was said.
+
+The first four are `pg_cron` jobs scheduled by the migrations that define them. **They
 require `pg_cron` to be available to the role running the migrations** — if it is not, the
 `cron.schedule()` calls are a no-op nobody notices until a year of Google data has quietly
 failed to expire. Migration `20260731090000_refresh_and_backoff.sql` asserts all three are
@@ -197,7 +223,7 @@ The result is that a leaked publishable key fails at the schema, before it can n
 Supabase's security advisor will report "RLS enabled, no policy" on every table. Here that
 notice is the desired state, not a finding to fix.
 
-The fourth is a Vercel cron, declared in `vercel.json`, because it has to call Google and
+The fifth is a Vercel cron, declared in `vercel.json`, because it has to call Google and
 the database cannot. Running elsewhere, point any scheduler at
 `GET /api/cron/refresh` with the bearer secret.
 
@@ -213,6 +239,7 @@ app/
   api/            route handlers; the only doors into the data
 
 lib/
+  assistant/      the call assistant boundary: briefing, tips, summary. Mock for now
   providers/      the provider boundary. Google Places is one implementation
   search/         discovery, cost ledger and spend ceiling
   enrichment/     the two-stage audit pass and its finding vocabulary
@@ -240,6 +267,9 @@ npm run build    # production build
 npm run start    # serve the production build
 npm run lint     # eslint
 npx tsc --noEmit # typecheck
+
+node scripts/build-schema.mjs      # regenerate supabase/schema.sql from the migrations
+node scripts/assistant-demo.mjs    # read what the mock assistant would say, three calls
 ```
 
 ---
