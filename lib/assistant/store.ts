@@ -439,6 +439,123 @@ export async function appendSegments(
 }
 
 /* ------------------------------------------------------------------------- *
+ * Tips
+ * ------------------------------------------------------------------------- */
+
+export interface StoredTip {
+  id: number
+  atMs: number
+  trigger: string
+  body: string
+  shown: boolean
+  actedOn: boolean
+}
+
+export interface TipWrite {
+  callId: string
+  atMs: number
+  trigger: string
+  body: string
+  /** Did it reach the screen. Written by the app, never by whatever produced it. */
+  shown: boolean
+}
+
+/**
+ * Record that the assistant said something, and return the row it went into.
+ *
+ * The id comes back because `acted_on` is written later, by a keypress, and the
+ * surface needs a handle on the row to write it to. Everything else about a tip
+ * is settled the moment it appears.
+ *
+ * NOT ON THE CALL'S CRITICAL PATH, and callers are expected to treat it that
+ * way. A tip that reached the screen has already done its job; a failed insert
+ * costs a row in an analysis that happens months later, and there is nothing
+ * about it worth interrupting a phone call to report. The rule the migration
+ * states holds on the way in: `body` must not quote the call, because this table
+ * outlives the fourteen-day transcript and a quoted sentence would outlive it
+ * too. Both sources satisfy it by construction — the briefing was written before
+ * the call, and the standing lines are in the vocabulary.
+ */
+export async function writeTip(write: TipWrite): Promise<number> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_tips')
+    .insert({
+      call_id: write.callId,
+      at_ms: write.atMs,
+      trigger: write.trigger,
+      body: write.body,
+      shown: write.shown,
+    })
+    .select('id')
+    .single()
+
+  if (error) throw new Error(`Could not record the tip: ${error.message}`)
+  return (data as { id: number }).id
+}
+
+/**
+ * The operator's own verdict on one tip.
+ *
+ * The column this whole table is eventually for. `shown` says the assistant
+ * spoke and `acted_on` says it was worth speaking, and only the second one can
+ * answer whether any of this helps — which is the same question
+ * `insight/outcomes.ts` asks of finding codes, and it will be asked the same
+ * way once there are enough calls to ask it of.
+ *
+ * One-way on purpose: there is no un-mark. A tip he used is a fact about a
+ * conversation that has since ended.
+ *
+ * Scoped by call as well as by id. The id comes back from the browser, and a
+ * route that updated on it alone would let a stale tab mark a row belonging to
+ * a different conversation — cheap to prevent, and the kind of thing that is
+ * only ever noticed a year later as a call whose tips do not add up.
+ */
+export async function markTipActedOn(callId: string, id: number): Promise<void> {
+  const supabase = createServiceClient()
+
+  const { error } = await supabase
+    .from('call_tips')
+    .update({ acted_on: true })
+    .eq('id', id)
+    .eq('call_id', callId)
+
+  if (error) throw new Error(`Could not mark the tip as used: ${error.message}`)
+}
+
+/** Every tip offered in one call, oldest first. */
+export async function readTips(callId: string): Promise<StoredTip[]> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_tips')
+    .select('id, at_ms, trigger, body, shown, acted_on')
+    .eq('call_id', callId)
+    .order('at_ms', { ascending: true })
+
+  if (error) throw new Error(`Could not read the tips: ${error.message}`)
+
+  return (
+    (data ?? []) as {
+      id: number
+      at_ms: number
+      trigger: string
+      body: string
+      shown: boolean
+      acted_on: boolean
+    }[]
+  ).map((row) => ({
+    id: row.id,
+    atMs: row.at_ms,
+    trigger: row.trigger,
+    body: row.body,
+    shown: row.shown,
+    actedOn: row.acted_on,
+  }))
+}
+
+/* ------------------------------------------------------------------------- *
  * Briefings
  * ------------------------------------------------------------------------- */
 

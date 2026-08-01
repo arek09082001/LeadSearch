@@ -5,7 +5,9 @@ import { useEffect, useRef, type ReactNode } from 'react'
 
 import { CommandButton, CommandLink } from '@/components/ui/command-button'
 import { useCallTranscript } from '@/components/calls/use-call-transcript'
-import type { TranscriptSegment } from '@/lib/assistant/types'
+import { useLiveTips, type ShownLiveTip } from '@/components/calls/use-live-tips'
+import type { Briefing, ShownTip, TranscriptSegment } from '@/lib/assistant/types'
+import { TIP_SPECS } from '@/lib/assistant/vocabulary'
 
 /*
  * The surface that is read with a phone against an ear.
@@ -238,6 +240,58 @@ function Transcript({
 }
 
 /* ------------------------------------------------------------------------- *
+ * The right column
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One tip. Read with half an eye, mid-sentence.
+ *
+ * NO COLOUR, AND THAT IS THE DECISION. DESIGN.md allows amber one meaning per
+ * surface and this surface already spends it on Start/Stop — the one thing on
+ * the page he presses. Green is transient data, which this is not: a tip is
+ * kept in `call_tips` long after the transcript beside it has expired. So the
+ * card earns attention with size and with an empty column around it, which are
+ * the two things that cost nothing while somebody is talking.
+ *
+ * NOTHING MOVES. No fade in, no pulse, no countdown ring. Motion at the edge of
+ * vision is the one thing guaranteed to pull attention off a conversation, and
+ * a tip that did that would cost more than it gave back on every call where it
+ * was wrong.
+ */
+function TipCard({ tip }: { tip: ShownLiveTip }) {
+  return (
+    <div className="border-l-2 border-rule-strong bg-panel px-4 py-3" role="status">
+      <p className="label text-ink-faint">{TIP_SPECS[tip.trigger].label}</p>
+      <p className="mt-2 text-2xl leading-snug text-ink">{tip.body}</p>
+
+      {/*
+        His own verdict, echoed back so the keypress is visibly not a no-op.
+        Quiet, because it is a note to a table read months from now — the tip
+        itself is the thing on this card worth looking at.
+      */}
+      {tip.actedOn ? <p className="label mt-2.5 text-ink-ghost">used</p> : null}
+    </div>
+  )
+}
+
+/**
+ * The three keys, said once, permanently.
+ *
+ * A legend rather than a hint that appears when it is relevant: a control he
+ * has to discover mid-call is a control he will not use, and three words in
+ * micro type at the foot of an otherwise empty column cost nothing to ignore.
+ */
+function TipKeys({ asking }: { asking: boolean }) {
+  return (
+    <div className="border-t border-rule px-4 py-1.5">
+      <p className="font-data text-micro text-ink-ghost">
+        {asking ? 'asking…' : 'esc hide · enter used · a ask'}
+      </p>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------------- *
  * The whole thing
  * ------------------------------------------------------------------------- */
 
@@ -252,6 +306,16 @@ export interface CallAssistantProps {
   initialSegments: TranscriptSegment[]
   /** The Phase 14 briefing, rendered on the server and passed through whole. */
   briefing: ReactNode
+  /**
+   * The same briefing, as data, for the rules to read.
+   *
+   * Not a duplicate of the node above and not replaceable by it. One is what
+   * the operator reads in the left column; this one is what `nextTip` searches
+   * for a prepared answer to a trigger, and a React element cannot be searched.
+   */
+  prepared: Briefing | null
+  /** Tips already shown in this call. Read back so a reload does not repeat them. */
+  initialTips: ShownTip[]
 }
 
 export function CallAssistant({
@@ -264,6 +328,8 @@ export function CallAssistant({
   closed,
   initialSegments,
   briefing,
+  prepared,
+  initialTips,
 }: CallAssistantProps) {
   const router = useRouter()
   const call = useCallTranscript({
@@ -271,6 +337,16 @@ export function CallAssistant({
     initialSegments,
     closed,
     onClosed: () => router.refresh(),
+  })
+
+  const tips = useLiveTips({
+    callId,
+    segments: call.segments,
+    elapsedMs: call.elapsedMs,
+    listening: call.listening,
+    consentNoted,
+    briefing: prepared,
+    initialShown: initialTips,
   })
 
   return (
@@ -390,24 +466,36 @@ export function CallAssistant({
           />
         </section>
 
-        {/* What the assistant will say, once it has anything to say. */}
+        {/*
+          What the assistant says, when it has anything to say.
+
+          EMPTY IS THE NORMAL STATE OF THIS COLUMN and the copy below says so
+          rather than apologising for it. An assistant that always has something
+          on screen is one that gets ignored by minute two, and then it is not
+          there for the moment it was built for.
+        */}
         <aside className="flex min-h-0 flex-col" aria-label="Tips">
           <div className="border-b border-rule bg-panel px-4 py-1.5">
             <h2 className="label text-ink-dim">Tips</h2>
           </div>
+
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-            {/*
-              Empty on purpose and not a placeholder graphic. The tip provider is
-              the next phase; this column is the space it lands in, and the
-              honest thing to put in it meanwhile is a sentence saying nothing is
-              watching — so that an empty column is never mistaken for an
-              assistant that listened and had no advice.
-            */}
-            <p className="text-sm text-ink-ghost">
-              Nothing is watching this call yet. Live tips are the next phase; the objections
-              prepared in the briefing are on the left.
-            </p>
+            {tips.current ? (
+              <TipCard tip={tips.current} />
+            ) : tips.empty ? (
+              <p className="text-base text-ink-faint">
+                Nothing to add. The prepared objections are on the left.
+              </p>
+            ) : (
+              <p className="text-sm text-ink-ghost">
+                {call.listening
+                  ? 'Listening. Nothing worth interrupting for.'
+                  : 'Tips appear here while the call is running.'}
+              </p>
+            )}
           </div>
+
+          <TipKeys asking={tips.asking} />
         </aside>
       </div>
     </div>

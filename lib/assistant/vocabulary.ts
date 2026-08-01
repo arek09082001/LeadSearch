@@ -32,6 +32,8 @@ export const TIP_TRIGGERS = [
   'send_me_an_email',
   'privacy_worry',
   'buying_signal',
+  'fully_booked',
+  'legal_worry',
   'consent_not_noted',
   'call_running_long',
 ] as const
@@ -49,48 +51,122 @@ export interface TipSpec {
    * on everything, and a tip that fires on everything is noise on a live call.
    */
   when: string
+  /**
+   * How much this is worth interrupting for. Higher wins.
+   *
+   * The number that settles a sentence containing three triggers. It is a
+   * property of the SITUATION rather than of the phrase that spotted it —
+   * "what does it cost" is the same size of moment however it was worded — which
+   * is why it lives here beside `when` and not in the rule list.
+   *
+   * The ordering is an argument, not a scale: a buying signal outranks an
+   * objection because an objection survives being answered a minute late and a
+   * buying signal does not, and consent outranks everything because it is the
+   * only one of these that cannot be put right afterwards.
+   */
+  weight: number
+  /**
+   * The tip when the briefing has nothing prepared for this trigger.
+   *
+   * Bounded by `MAX_TIP_WORDS`, and the bound is checked by the demo script
+   * rather than trusted. A standing line is the assistant speaking for itself —
+   * true of any call of this kind, argued from nothing this lead was measured on
+   * — so it says what to DO and never what is the case. The prepared answer in
+   * the briefing is better whenever there is one, and `composeTip` prefers it.
+   */
+  standing: string
 }
 
 export const TIP_SPECS: Record<TipTrigger, TipSpec> = {
   no_time: {
     label: 'No time',
     when: 'They say they are busy, in the middle of something, or ask you to be quick.',
+    weight: 35,
+    standing: 'Offer the written report instead. Get an email address.',
   },
   already_have_someone: {
     label: 'Has someone',
     when: 'A nephew, an agency or an employee is named as the one who does the website.',
+    weight: 45,
+    standing: 'Ask when they last heard from them.',
   },
   happy_as_is: {
     label: 'Happy as is',
     when: 'They say the site is fine, or that customers find them anyway.',
+    weight: 40,
+    standing: 'Ask them to open it on their phone.',
   },
   price_question: {
     label: 'Price',
     when: 'They ask what it costs, before any scope has been agreed.',
+    weight: 60,
+    standing: 'Do not quote. Ask what they have in mind.',
   },
   not_the_decider: {
     label: 'Not the decider',
     when: 'The person on the phone defers to an owner, a partner or a head office.',
+    weight: 80,
+    standing: 'Get a name and when they are in.',
   },
   send_me_an_email: {
     label: 'Send email',
     when: 'They ask for it in writing — which ends the call unless something is agreed first.',
+    weight: 65,
+    standing: 'Agree a day to speak before you send it.',
   },
   privacy_worry: {
     label: 'Privacy',
     when: 'They ask where you got the number, or how their data is being used.',
+    weight: 70,
+    standing: 'Public Google listing and their own website. Say it plainly.',
   },
   buying_signal: {
     label: 'Buying signal',
     when: 'They ask about timing, next steps, or what it would involve. Stop selling.',
+    weight: 90,
+    standing: 'They are in. Stop selling and book the time.',
+  },
+  /*
+   * The one where the whole pitch is wrong rather than badly timed.
+   *
+   * A firm turning work away is not a firm that wants more enquiries, and the
+   * argument that lands is the other one the same website carries: the people
+   * they cannot hire read it before they apply. Kept apart from `happy_as_is`
+   * because the answers are not the same sentence said with more conviction —
+   * one asks them to look at their phone, the other changes what is being sold.
+   */
+  fully_booked: {
+    label: 'Fully booked',
+    when: 'They say they have enough work, are booked out, or are turning jobs away.',
+    weight: 50,
+    standing: 'Ask if they are short of staff, not customers.',
+  },
+  /*
+   * The imprint finding, coming back the other way.
+   *
+   * NÜCHTERN, and the standing line is written to hold that line under pressure:
+   * the audit measured whether a page exists and what is on it, and it did not
+   * measure whether anyone is going to be fined for it. A tip that said "you
+   * could be abgemahnt" would be this tool inventing a legal opinion in the one
+   * moment the operator is least able to check it.
+   */
+  legal_worry: {
+    label: 'Legal',
+    when: 'They raise the imprint, a warning letter or a lawyer.',
+    weight: 75,
+    standing: 'State the finding. No warnings, no legal advice.',
   },
   consent_not_noted: {
     label: 'Consent',
     when: 'The call is being transcribed and consent has not been marked yet.',
+    weight: 100,
+    standing: 'Say the call is being transcribed. Then tick the box.',
   },
   call_running_long: {
     label: 'Running long',
     when: 'The call has passed the length at which nothing new gets agreed.',
+    weight: 10,
+    standing: 'Agree the next step and get off the phone.',
   },
 }
 

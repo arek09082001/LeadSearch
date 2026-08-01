@@ -212,8 +212,13 @@ function historyOf(
  * Deliberately a copy rather than a spread of the row. Once a model is billing
  * per token every field here is being paid for on every call, and a spread would
  * mean the next column added to `LeadRow` silently joins the prompt.
+ *
+ * Exported because `TipContext` needs the same narrowing mid-call and there must
+ * not be a second one: two functions turning a row into an `AssistantLead` would
+ * be two answers to "what does the assistant know about this business", and they
+ * would drift on the first column anyone added.
  */
-function leadOf(lead: LeadRow): AssistantLead {
+export function leadOf(lead: LeadRow): AssistantLead {
   return {
     id: lead.id,
     name: lead.name,
