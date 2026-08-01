@@ -1,8 +1,10 @@
 import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
+import { CallBriefing } from '@/components/leads/call-briefing'
 import { ChangeMarks } from '@/components/leads/change-marks'
 import { LeadActions } from '@/components/leads/lead-actions'
+import { PrepareCall } from '@/components/leads/prepare-call'
 import { LeadScreenshot } from '@/components/leads/lead-screenshot'
 import { LeadTimeline } from '@/components/leads/lead-timeline'
 import { ReAudit } from '@/components/leads/re-audit'
@@ -333,7 +335,7 @@ function Changed({ lead }: { lead: LeadDetail['lead'] }) {
 }
 
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history, score, movement, timeline } = detail
+  const { lead, audit, history, score, movement, timeline, briefing } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -359,6 +361,12 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
       <StatusStrip provenance="book" detail={`Google data ${shortDate(lead.fetchedAt)}`}>
         <RefreshLead leadId={lead.id} fetchedAt={lead.fetchedAt} />
         <ReAudit leadId={lead.id} pending={auditing || profiling} />
+        {/*
+          Last on the strip and the only primary control on it. The other two
+          maintain the lead; this one is what he presses because he is about to
+          ring the number in the header.
+        */}
+        <PrepareCall leadId={lead.id} prepared={briefing !== null} />
       </StatusStrip>
 
       <header className="border-b border-rule-strong px-3 py-2.5">
@@ -424,6 +432,15 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
 
       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_24rem]">
         <section className="min-w-0">
+          {/*
+            Above the diagnosis, because it is the answer and the diagnosis is
+            the argument for it. Rendered only once something has prepared one:
+            the control that does so is on the strip above, and a permanent
+            empty block on every lead in the book would be a line to read past a
+            thousand times to be useful forty.
+          */}
+          {briefing ? <CallBriefing briefing={briefing} /> : null}
+
           {!audit ? (
             <div className="px-3 py-6">
               <p className="text-sm text-ink-dim">

@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { readLatestBriefing } from '@/lib/assistant/store'
 import { createServiceClient } from '@/lib/supabase/server'
 import { isChangeCode } from '@/lib/leads/changes'
 import { today } from '@/lib/leads/dates'
@@ -1290,6 +1291,15 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   ])
   if (!lead) return null
 
+  /*
+   * The briefing is read after the lead rather than beside it, because whether
+   * it is stale is a comparison against `lead.last_audited_at` and that number
+   * has to be in hand first. One more round trip on a page that already makes
+   * four, in exchange for the staleness question being answered in the store
+   * instead of on the surface.
+   */
+  const briefing = await readLatestBriefing(id, lead.lastAuditedAt)
+
   const movement = compareScores(previousScore, score)
 
   const { data: audits } = await supabase
@@ -1302,7 +1312,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score, movement, timeline }
+  if (!newest) return { lead, audit: null, history: [], score, movement, timeline, briefing }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -1341,7 +1351,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline }
+  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline, briefing }
 }
 
 export async function updateLead(

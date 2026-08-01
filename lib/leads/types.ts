@@ -1,3 +1,4 @@
+import type { StoredBriefing } from '@/lib/assistant/types'
 import { CHANGE_CODES, type ChangeCode } from '@/lib/leads/changes'
 import {
   FINDING_CODES,
@@ -603,6 +604,15 @@ export interface LeadDetail {
   movement: ScoreMovement | null
   /** Status changes, notes and Google changes as one sequence, newest first. */
   timeline: TimelineEntry[]
+  /**
+   * What to open the call with, if anything has ever prepared one.
+   *
+   * Null until the operator presses the button, and null is the ordinary state:
+   * a briefing is prepared for the forty leads that get phoned, not the thousand
+   * that get saved. It carries its own age and its own staleness, because it is
+   * derived from the audit rather than being the audit.
+   */
+  briefing: StoredBriefing | null
 }
 
 /* ------------------------------------------------------------------------- *
