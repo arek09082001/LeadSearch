@@ -269,11 +269,17 @@ export async function readCall(callId: string): Promise<CallRow | null> {
   return data ? toCall(data as unknown as RawCall) : null
 }
 
-/** Finished attempts before this one, newest first. Feeds `BriefingHistory`. */
+/**
+ * Finished attempts before this one, newest first. Feeds `BriefingHistory`.
+ *
+ * The id comes back as well as the two facts read off the row, because the
+ * summary of the last call hangs off it and `readNewestSummary` needs somewhere
+ * to look. It was already being selected and thrown away.
+ */
 export async function readPreviousCalls(
   leadId: string,
   excludeCallId: string | null,
-): Promise<{ endedAt: string | null; outcome: string | null }[]> {
+): Promise<{ id: string; endedAt: string | null; outcome: string | null }[]> {
   const supabase = createServiceClient()
 
   let query = supabase
@@ -288,10 +294,47 @@ export async function readPreviousCalls(
   const { data, error } = await query
   if (error) throw new Error(`Could not read the call history: ${error.message}`)
 
-  return ((data ?? []) as { ended_at: string | null; outcome: string | null }[]).map((row) => ({
+  return (
+    (data ?? []) as { id: string; ended_at: string | null; outcome: string | null }[]
+  ).map((row) => ({
+    id: row.id,
     endedAt: row.ended_at,
     outcome: row.outcome,
   }))
+}
+
+/**
+ * The most recent summary written across a set of calls, as prose.
+ *
+ * WHAT THE NEXT BRIEFING IS OPENED WITH, and the reason it does not filter on
+ * `accepted`: that column says whether the operator agreed with the suggestions,
+ * not whether the conversation took place. A summary he read and rejected still
+ * describes a call the business remembers.
+ *
+ * Ordered across the whole set rather than walked call by call, so a call that
+ * was summarised late — regenerated the next morning, say — does not lose to an
+ * older call that happened to be summarised on the day. What comes back is the
+ * newest paragraph, full stop.
+ *
+ * Body only. The suggestions on the row are proposals about a call that has
+ * already been filed, and handing a provider last month's suggested status would
+ * invite it to argue from a decision rather than from what was said.
+ */
+export async function readNewestSummary(callIds: readonly string[]): Promise<string | null> {
+  if (!callIds.length) return null
+
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('call_summaries')
+    .select('body')
+    .in('call_id', [...callIds])
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(`Could not read the last summary: ${error.message}`)
+  return data ? (data as { body: string }).body : null
 }
 
 /**

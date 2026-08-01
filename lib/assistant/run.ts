@@ -4,6 +4,7 @@ import { getAssistant } from '@/lib/assistant'
 import { buildBriefingInput } from '@/lib/assistant/briefing-input'
 import {
   readCachedReviews,
+  readNewestSummary,
   readPreviousCalls,
   startCall,
   writeBriefing,
@@ -114,12 +115,28 @@ export async function prepareBriefing(
     readPreviousCalls(lead.id, call.id),
   ])
 
+  /*
+   * What was said last time, if there was a last time.
+   *
+   * SEQUENTIAL RATHER THAN IN THE `Promise.all` ABOVE, because it needs the call
+   * ids that pass produces. One extra round trip on a path the operator is
+   * already waiting on — and it buys the one input that keeps a fourth call from
+   * opening like a first. Skipped without a query when the lead is cold, which
+   * is most leads.
+   *
+   * NOT FILTERED ON `accepted`. That column says whether he agreed with the
+   * suggestions, not whether the conversation happened; see the note on
+   * `BriefingHistory.lastSummary`.
+   */
+  const lastSummary = await readNewestSummary(previousCalls.map((call) => call.id))
+
   const input = buildBriefingInput({
     lead,
     audit,
     score,
     timeline,
     previousCalls,
+    lastSummary,
     reviews: reviews.reviews,
   })
 
