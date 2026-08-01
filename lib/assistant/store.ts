@@ -3,6 +3,7 @@ import 'server-only'
 import type {
   Briefing,
   BriefingReview,
+  CallHistoryEntry,
   Speaker,
   StoredBriefing,
   StoredSummary,
@@ -290,6 +291,93 @@ export async function readPreviousCalls(
   return ((data ?? []) as { ended_at: string | null; outcome: string | null }[]).map((row) => ({
     endedAt: row.ended_at,
     outcome: row.outcome,
+  }))
+}
+
+/**
+ * How many attempts to put on the lead page.
+ *
+ * The same twenty `readPreviousCalls` reads, and the same for the same reason:
+ * past that, a call history is an archive rather than a thing anybody scrolls.
+ * The page says when it has capped rather than trailing off silently.
+ */
+export const CALL_HISTORY_LIMIT = 20
+
+/**
+ * Every attempt on one lead, newest first, with what came of each.
+ *
+ * TWO QUERIES RATHER THAN AN EMBED. PostgREST would join `call_summaries` in one
+ * round trip, but a call may carry several summaries — the table allows it, and
+ * regenerating is how a first attempt that missed the point gets a second — so
+ * the embed would return an array per call that this function would have to sort
+ * and cut anyway. Doing it here makes "the newest summary wins" a line of code
+ * that can be read rather than an ordering hidden in a query string.
+ *
+ * The second query is skipped entirely when there are no calls, which is the
+ * ordinary case: a briefing is prepared for the forty leads that get phoned, not
+ * the thousand that get saved.
+ */
+export async function readCallHistory(
+  leadId: string,
+  limit = CALL_HISTORY_LIMIT,
+): Promise<CallHistoryEntry[]> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('calls')
+    .select('id, started_at, ended_at, outcome, status_before, status_after')
+    .eq('lead_id', leadId)
+    .order('started_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw new Error(`Could not read the call history: ${error.message}`)
+
+  const rows = (data ?? []) as {
+    id: string
+    started_at: string
+    ended_at: string | null
+    outcome: string | null
+    status_before: LeadStatus | null
+    status_after: LeadStatus | null
+  }[]
+
+  if (!rows.length) return []
+
+  const { data: summaryRows, error: summaryError } = await supabase
+    .from('call_summaries')
+    .select('call_id, body, accepted, created_at')
+    .in(
+      'call_id',
+      rows.map((row) => row.id),
+    )
+    .order('created_at', { ascending: false })
+
+  if (summaryError) {
+    throw new Error(`Could not read the summaries: ${summaryError.message}`)
+  }
+
+  /*
+   * Newest first out of the query, and `set` only on the first sighting — so
+   * what survives per call is the most recent summary. The same rule
+   * `readLatestSummary` applies to one call, applied here to twenty.
+   */
+  const newest = new Map<string, { body: string; accepted: boolean | null }>()
+  for (const row of (summaryRows ?? []) as {
+    call_id: string
+    body: string
+    accepted: boolean | null
+  }[]) {
+    if (!newest.has(row.call_id)) newest.set(row.call_id, { body: row.body, accepted: row.accepted })
+  }
+
+  return rows.map((row) => ({
+    id: row.id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    outcome: row.outcome,
+    statusBefore: row.status_before,
+    statusAfter: row.status_after,
+    summary: newest.get(row.id) ?? null,
   }))
 }
 

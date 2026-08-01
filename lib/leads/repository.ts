@@ -1,6 +1,6 @@
 import 'server-only'
 
-import { readLatestBriefing } from '@/lib/assistant/store'
+import { readCallHistory, readLatestBriefing } from '@/lib/assistant/store'
 import { createServiceClient } from '@/lib/supabase/server'
 import { isChangeCode } from '@/lib/leads/changes'
 import { today } from '@/lib/leads/dates'
@@ -1283,11 +1283,15 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
 
   // The score and the history are read alongside rather than after: neither
   // hangs off the audit, and a lead with no audit at all can carry both.
-  const [lead, score, previousScore, timeline] = await Promise.all([
+  // The call history joins them: it hangs off `lead_id` rather than off the
+  // audit or the score, so a lead with neither can still have been rung four
+  // times, and there is nothing above it that has to be in hand first.
+  const [lead, score, previousScore, timeline, calls] = await Promise.all([
     readLead(id),
     readCurrentScore(id),
     readPreviousScore(id),
     readTimeline(id),
+    readCallHistory(id),
   ])
   if (!lead) return null
 
@@ -1327,7 +1331,9 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score, movement, timeline, briefing }
+  if (!newest) {
+    return { lead, audit: null, history: [], score, movement, timeline, briefing, calls }
+  }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -1366,7 +1372,16 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline, briefing }
+  return {
+    lead,
+    audit: toAudit(newest, findings),
+    history,
+    score,
+    movement,
+    timeline,
+    briefing,
+    calls,
+  }
 }
 
 export async function updateLead(

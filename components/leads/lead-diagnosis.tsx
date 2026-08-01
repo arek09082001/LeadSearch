@@ -2,6 +2,7 @@ import Link from 'next/link'
 
 import { IconExternal, IconPulse } from '@/components/icons'
 import { CallBriefing } from '@/components/leads/call-briefing'
+import { CallHistory } from '@/components/leads/call-history'
 import { ChangeMarks } from '@/components/leads/change-marks'
 import { LeadActions } from '@/components/leads/lead-actions'
 import { PrepareCall } from '@/components/leads/prepare-call'
@@ -335,7 +336,7 @@ function Changed({ lead }: { lead: LeadDetail['lead'] }) {
 }
 
 export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
-  const { lead, audit, history, score, movement, timeline, briefing } = detail
+  const { lead, audit, history, score, movement, timeline, briefing, calls } = detail
 
   const faults = audit ? audit.findings.filter((entry) => !entry.passed).sort(bySeverity) : []
   const passes = audit ? audit.findings.filter((entry) => entry.passed).sort(bySeverity) : []
@@ -516,6 +517,19 @@ export function LeadDiagnosis({ detail }: { detail: LeadDetail }) {
               ) : null}
             </>
           )}
+
+          {/*
+            The calls sit directly above the timeline, and the two are one thing
+            read in one place: what has happened with this business. Calls first
+            because they are the coarser record — five attempts and two
+            conversations — and the timeline underneath is what he wrote while
+            they were going on.
+
+            In the wide half for the same reason the timeline is: the right
+            column is the audit's notebook, measurements and past runs, and a
+            summary is prose rather than a measurement.
+          */}
+          <CallHistory entries={calls} />
 
           {/*
             The history sits under the diagnosis rather than in the column to
