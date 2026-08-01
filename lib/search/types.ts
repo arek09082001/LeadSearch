@@ -8,14 +8,39 @@ import type { ProviderPlace, SearchEstimate } from '@/lib/providers/types'
 
 /** Everything the UI needs to draw the running total, in one object. */
 export interface BudgetState {
+  /** The Google ceiling. Bounds provider spend only; see `assistantCeilingUsd`. */
   ceilingUsd: number
-  /** Billed spend this UTC month — what the invoice will say. */
+  /**
+   * Billed spend this UTC month — what the invoice will say. EVERYTHING: Google
+   * and models both, because this is the figure on screen and the operator is
+   * being told what he is spending rather than which half of the app spent it.
+   */
   monthToDateUsd: number
   /** List value of the same calls. Above `monthToDateUsd` by whatever the free tier absorbed. */
   monthToDateListUsd: number
   remainingUsd: number
   /** True once the ceiling is reached. No billable call will be authorised. */
   exhausted: boolean
+  /**
+   * The Google half of `monthToDateUsd` — the part `ceilingUsd` actually bounds.
+   *
+   * Carried separately because the two numbers stopped being the same the day
+   * the assistant learned to cost money, and a readout that showed one figure
+   * against the other ceiling would be lying in whichever direction was worse.
+   */
+  providerMonthToDateUsd: number
+  /**
+   * What the model-backed assistant may cost this month, and what it has.
+   *
+   * A second, explicit cap rather than a share of the first. Google has a free
+   * tier and a model does not, so one number cannot be a cautious default for
+   * both — see `supabase/migrations/20260801150000_assistant_spend.sql`. Zero
+   * with `ASSISTANT_PROVIDER` unset is the ordinary state: nothing is spending.
+   */
+  assistantCeilingUsd: number
+  assistantMonthToDateUsd: number
+  /** True once model spend has reached its own ceiling. Briefings are refused; calls are not. */
+  assistantExhausted: boolean
   /** `YYYY-MM`, UTC — Google's billing month, not the operator's. */
   month: string
   /**

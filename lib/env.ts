@@ -40,4 +40,21 @@ export const env = {
   get ASSISTANT_PROVIDER() {
     return process.env.ASSISTANT_PROVIDER || 'mock'
   },
+
+  /**
+   * The key the model-backed assistant answers with.
+   *
+   * Required rather than optional, and it throws on read rather than at import
+   * for the reason at the top of this file: `ASSISTANT_PROVIDER=anthropic` with
+   * no key is a misconfiguration, and it should be reported as one at the moment
+   * a briefing is asked for — not turned into a build failure for pages that
+   * never open a call.
+   *
+   * Server-only by omission. There is no NEXT_PUBLIC_ form of this and there
+   * must never be: the three surfaces that reach a model all go through route
+   * handlers, and a key in the client bundle is a key on a stranger's laptop.
+   */
+  get ANTHROPIC_API_KEY() {
+    return required('ANTHROPIC_API_KEY', process.env.ANTHROPIC_API_KEY)
+  },
 }

@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { assistantRateCard, isAssistantSku } from '@/lib/assistant/anthropic/pricing'
 import { getProvider } from '@/lib/providers'
 import { BudgetExceededError, type CostEvent, type ProviderContext } from '@/lib/providers/types'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -18,6 +19,21 @@ import type { BudgetState } from '@/lib/search/types'
  *   - The free monthly allowance is part of the price. Google gives 1,000 Text
  *     Search Enterprise calls a month; a guard that ignored them would refuse
  *     to spend money that was never going to be spent.
+ *
+ * ONE LEDGER, TWO CEILINGS, SINCE THE ASSISTANT LEARNED TO COST MONEY.
+ *
+ * Model spend is written to `api_usage` like everything else — the running total
+ * on screen has to be the whole bill, not the Google part of it — but it is
+ * bounded by `assistant_ceiling_usd` and enforced in `lib/assistant/anthropic/
+ * spend.ts`, which is the only place that knows what a prompt weighs before it
+ * is sent. See that file for why the two ceilings are disjoint rather than one.
+ *
+ * WHAT THAT COSTS THIS FILE is a filter it did not used to need. Every sum here
+ * that feeds the GOOGLE ceiling now excludes the assistant's rows, because a
+ * shared total would mean a month of briefings quietly refusing a search — the
+ * exact coupling the second ceiling exists to prevent. The totals that feed the
+ * SCREEN keep everything, because the operator is being told what he is
+ * spending, not which subsystem spent it.
  */
 
 export type { BudgetState }
@@ -39,7 +55,11 @@ async function loadUsage() {
 
   const [usage, settings] = await Promise.all([
     supabase.rpc('api_usage_month_to_date'),
-    supabase.from('app_settings').select('monthly_ceiling_usd').eq('id', true).single(),
+    supabase
+      .from('app_settings')
+      .select('monthly_ceiling_usd, assistant_ceiling_usd')
+      .eq('id', true)
+      .single(),
   ])
 
   if (usage.error) throw new Error(`Could not read API usage: ${usage.error.message}`)
@@ -55,15 +75,30 @@ async function loadUsage() {
   return {
     rows,
     ceilingUsd: Number(settings.data.monthly_ceiling_usd),
+    assistantCeilingUsd: Number(settings.data.assistant_ceiling_usd),
   }
 }
 
 export async function getBudgetState(): Promise<BudgetState> {
-  const { rows, ceilingUsd } = await loadUsage()
-  const rateCard = getProvider().rateCard
+  const { rows, ceilingUsd, assistantCeilingUsd } = await loadUsage()
+  /*
+   * Both rate cards, because the readout has to name both halves of the bill.
+   * The assistant's is a function rather than a constant — one of its prices
+   * expires on a date; see `assistantRateCard`.
+   */
+  const rateCard = { ...getProvider().rateCard, ...assistantRateCard() }
 
+  const assistantRows = rows.filter((row) => isAssistantSku(row.sku))
+  const providerRows = rows.filter((row) => !isAssistantSku(row.sku))
+
+  // The screen's totals. Everything, because the operator is being told what he
+  // is spending rather than which half of the app spent it.
   const monthToDateUsd = rows.reduce((sum, row) => sum + row.billedUsd, 0)
   const monthToDateListUsd = rows.reduce((sum, row) => sum + row.listUsd, 0)
+
+  // The two ceilings' own totals, each over its own half of the ledger.
+  const providerMonthToDateUsd = providerRows.reduce((sum, row) => sum + row.billedUsd, 0)
+  const assistantMonthToDateUsd = assistantRows.reduce((sum, row) => sum + row.billedUsd, 0)
 
   /*
    * Every SKU with spend, plus every SKU the operator could still hit. Showing
@@ -95,8 +130,19 @@ export async function getBudgetState(): Promise<BudgetState> {
     ceilingUsd,
     monthToDateUsd,
     monthToDateListUsd,
-    remainingUsd: Math.max(0, ceilingUsd - monthToDateUsd),
-    exhausted: monthToDateUsd >= ceilingUsd,
+    /*
+     * Against the GOOGLE half, not the total. `remainingUsd` and `exhausted` are
+     * read as "will the next search be authorised", and the only thing that can
+     * answer that is the ledger the Google guard checks — see the note at the
+     * top. Subtracting model spend here would make a month of briefings look
+     * like a search budget that had run out.
+     */
+    remainingUsd: Math.max(0, ceilingUsd - providerMonthToDateUsd),
+    exhausted: providerMonthToDateUsd >= ceilingUsd,
+    providerMonthToDateUsd,
+    assistantCeilingUsd,
+    assistantMonthToDateUsd,
+    assistantExhausted: assistantMonthToDateUsd >= assistantCeilingUsd,
     month: currentMonth(),
     // Priced with an empty query: every discovery run shares one field mask, so
     // the SKU is a property of the provider, not of what was typed.
@@ -120,6 +166,28 @@ export async function setMonthlyCeiling(usd: number): Promise<BudgetState> {
   return getBudgetState()
 }
 
+/**
+ * The other ceiling: what the model-backed assistant may cost this month.
+ *
+ * A separate function rather than a second argument, because the two numbers are
+ * set from two different places for two different reasons and neither press
+ * should be able to move the other by omission.
+ */
+export async function setAssistantCeiling(usd: number): Promise<BudgetState> {
+  if (!Number.isFinite(usd) || usd < 0) {
+    throw new Error('The assistant ceiling must be zero or more.')
+  }
+
+  const supabase = createServiceClient()
+  const { error } = await supabase
+    .from('app_settings')
+    .update({ assistant_ceiling_usd: usd })
+    .eq('id', true)
+
+  if (error) throw new Error(`Could not save the assistant ceiling: ${error.message}`)
+  return getBudgetState()
+}
+
 /* ------------------------------------------------------------------------- *
  * The guard
  * ------------------------------------------------------------------------- */
@@ -138,6 +206,7 @@ export class SpendGuard implements ProviderContext {
   #billedUsd: number
   #unitsBySku: Map<string, number>
   #searchId: string | null
+  #callId: string | null
   #events: CostEvent[] = []
   #spentUsd = 0
   #requests = 0
@@ -147,20 +216,41 @@ export class SpendGuard implements ProviderContext {
     billedUsd: number
     unitsBySku: Map<string, number>
     searchId: string | null
+    callId: string | null
   }) {
     this.#ceilingUsd = init.ceilingUsd
     this.#billedUsd = init.billedUsd
     this.#unitsBySku = init.unitsBySku
     this.#searchId = init.searchId
+    this.#callId = init.callId
   }
 
-  static async create(searchId: string | null = null): Promise<SpendGuard> {
+  /**
+   * `callId` is for the one billable request that is not part of a search: the
+   * review fetch a briefing makes seconds before the phone is picked up. It is
+   * what makes "what did that call cost" answerable about the whole call rather
+   * than about its model half.
+   */
+  static async create(
+    searchId: string | null = null,
+    callId: string | null = null,
+  ): Promise<SpendGuard> {
     const { rows, ceilingUsd } = await loadUsage()
+    /*
+     * The assistant's rows are excluded, and this is the line that keeps the two
+     * ceilings disjoint. They are in the same table because the operator is
+     * owed one running total; they are not in this sum because `monthly_ceiling_usd`
+     * is a statement about what Google may cost, and a month of briefings must
+     * never be the reason a search is refused.
+     */
+    const provider = rows.filter((row) => !isAssistantSku(row.sku))
+
     return new SpendGuard({
       ceilingUsd,
-      billedUsd: rows.reduce((sum, row) => sum + row.billedUsd, 0),
-      unitsBySku: new Map(rows.map((row) => [row.sku, row.units])),
+      billedUsd: provider.reduce((sum, row) => sum + row.billedUsd, 0),
+      unitsBySku: new Map(provider.map((row) => [row.sku, row.units])),
       searchId,
+      callId,
     })
   }
 
@@ -232,6 +322,7 @@ export class SpendGuard implements ProviderContext {
       free_units: freeUnits,
       billed_amount_usd: billedUsd,
       search_id: this.#searchId,
+      call_id: this.#callId,
     })
 
     /*

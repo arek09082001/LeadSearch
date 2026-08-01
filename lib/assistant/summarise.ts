@@ -96,7 +96,10 @@ export async function summariseCall(
   // `leadOf` rather than a second narrowing of the row. There is one answer to
   // what the assistant knows about a business and it is the one the briefing
   // used; see the note on that function.
-  const summary = await assistant.summary.summarise(transcript, leadOf(lead), { signal })
+  const summary = await assistant.summary.summarise(transcript, leadOf(lead), {
+    signal,
+    callId: call.id,
+  })
 
   /*
    * The offset becomes a day, here, once.

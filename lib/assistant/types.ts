@@ -71,15 +71,29 @@ export interface AssistantOrigin {
  * cannot be aborted would leave the surface holding answers to questions nobody
  * is still asking.
  *
- * Spend is deliberately NOT here yet. The Google boundary passes `authorizeSpend`
- * because a paginating provider must be stoppable between pages; what the
- * equivalent is for a token-billed call is a Phase 17 question, and inventing
- * the hook now would mean designing it against a provider nobody has written.
- * The rule it will have to satisfy is already written down: everything goes
- * through the same ledger `api_usage` holds.
+ * SPEND IS STILL NOT A CALLBACK HERE, and Phase 17 is the answer to why. The
+ * Google boundary passes `authorizeSpend` because a paginating provider must be
+ * stoppable BETWEEN pages — the caller cannot know how many requests a search
+ * will make, so the decision has to travel down. A token-billed assistant makes
+ * exactly one request per call, so there is nothing to stop between; the guard
+ * lives inside the provider, next to the only thing that knows what a prompt
+ * weighs. The rule it satisfies is the one that was already written down:
+ * everything goes through the same ledger `api_usage` holds.
+ *
+ * WHAT THE PROVIDER DOES NEED IS WHICH CALL IT IS BEING PAID FOR, which is why
+ * `callId` is here. It buys one question an answer — "what did that call cost" —
+ * and it is optional because two of the three jobs are reachable without one.
  */
 export interface AssistantContext {
   signal?: AbortSignal
+  /**
+   * The `calls` row this request belongs to, written to `api_usage.call_id`.
+   *
+   * Carried rather than derived because a provider does no I/O of its own and
+   * could not look it up. Null is honest: a provider asked something outside a
+   * call still bills, and the row says so by leaving the column empty.
+   */
+  callId?: string | null
 }
 
 /* ------------------------------------------------------------------------- *
