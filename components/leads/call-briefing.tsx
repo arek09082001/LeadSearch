@@ -7,34 +7,36 @@ import { fullDate, shortDate } from '@/lib/leads/dates'
  *
  * The one surface in this product read with a phone already ringing, and it is
  * built for that and nothing else: the type is larger than anywhere else here,
- * the sentences are short, and there is no measurement on it. Everything below
- * it on the page — the fault list, the evidence, the notebook — is what this was
- * derived from, and he is not going to read it in the four seconds before
- * somebody says hello.
+ * the sentences are short, and there is not a measurement on it. Everything
+ * below it on the page — the fault list, the evidence, the notebook — is what
+ * this was derived from, and none of it is going to be read in the four seconds
+ * before somebody says hello.
  *
  * ONE AMBER THING. DESIGN.md gives the accent exactly one meaning per surface,
- * and here it is the strongest hook: the sentence he opens with. Every other
+ * and here it is the opening line: the words he actually says first. Every other
  * line on the sheet is ink, dim, or faint. A briefing with five amber sentences
- * would be a briefing with none.
+ * is a briefing with none.
  *
- * It sits above the diagnosis rather than beside it because it is the answer and
- * the diagnosis is the argument, and it prints alone — see the print block in
- * globals.css, which this section's `data-print-region` is the hook for.
+ * It sits above the diagnosis because it is the answer and the diagnosis is the
+ * argument, and it prints alone — see the print block in globals.css, which this
+ * section's `data-print-region` is the hook for.
  */
 
-/** The provenance line: what this was built from, and how old that was. */
+/** The provenance line: who wrote it, from what, and how old that was. */
 function Provenance({ briefing }: { briefing: StoredBriefing }) {
   const parts = [
-    `prepared ${shortDate(briefing.createdAt)}`,
+    `prepared ${shortDate(briefing.generatedAt)}`,
     briefing.diagnosisAsOf ? `diagnosis ${shortDate(briefing.diagnosisAsOf)}` : 'no diagnosis',
-    briefing.reviewsAsOf
-      ? `${briefing.reviewCount} ${briefing.reviewCount === 1 ? 'review' : 'reviews'} ${shortDate(briefing.reviewsAsOf)}`
-      : 'no reviews read',
-    briefing.model ? briefing.model : briefing.provider,
+    briefing.reviewCount === null
+      ? 'no reviews read'
+      : `${briefing.reviewCount} ${briefing.reviewCount === 1 ? 'review' : 'reviews'}`,
+    // The model when there was one, the registry id when there was not. Never
+    // both, and never a placeholder — see AssistantOrigin.
+    briefing.model ?? briefing.provider,
   ]
 
   return (
-    <p className="font-data text-micro text-ink-faint" title={fullDate(briefing.createdAt)}>
+    <p className="font-data text-micro text-ink-faint" title={fullDate(briefing.generatedAt)}>
       {parts.join(' · ')}
     </p>
   )
@@ -50,14 +52,10 @@ function Block({ title, children }: { title: string; children: React.ReactNode }
 }
 
 export function CallBriefing({ briefing }: { briefing: StoredBriefing }) {
-  const { opener, hooks, evidence, objections, avoid } = briefing.briefing
+  const { headline, opening, points, objections, ask, avoid } = briefing.briefing
 
   return (
-    <section
-      data-print-region
-      aria-label="Call briefing"
-      className="border-b border-rule-strong"
-    >
+    <section data-print-region aria-label="Call briefing" className="border-b border-rule-strong">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b border-rule bg-panel px-3 py-1.5">
         <h2 className="label text-ink-dim">Call briefing</h2>
         <div className="flex items-baseline gap-3">
@@ -68,9 +66,9 @@ export function CallBriefing({ briefing }: { briefing: StoredBriefing }) {
 
       {/*
         The same guard the diagnosis carries, one level up. A briefing written
-        from an audit that has since been re-run may open with a fault that is
-        no longer there — and unlike the fault list, this one is designed to be
-        read out loud without being checked first.
+        from an audit that has since been re-run may open with a fault that is no
+        longer there — and unlike the fault list, this one is built to be read
+        out loud without being checked first.
       */}
       {briefing.stale ? (
         <p className="border-b border-rule border-l border-l-signal bg-panel px-3 py-2 text-sm text-ink">
@@ -80,25 +78,35 @@ export function CallBriefing({ briefing }: { briefing: StoredBriefing }) {
         </p>
       ) : null}
 
-      {/* The sentences he actually says. The largest type on the page. */}
       <div className="border-b border-rule px-3 py-3">
-        {opener.map((line) => (
-          <p key={line} className="max-w-[62ch] text-xl text-ink [&+p]:mt-2">
-            {line}
-          </p>
-        ))}
+        {/* Who they are and why they are worth the call. Read, not said. */}
+        {headline ? <p className="max-w-[62ch] text-sm text-ink-faint">{headline}</p> : null}
+
+        {/* The words he actually says. The largest type on the page, and the
+            one amber thing on this surface. */}
+        <p className="mt-1.5 max-w-[62ch] text-xl text-signal">{opening}</p>
       </div>
 
-      {hooks.length ? (
-        <Block title={`Hooks — strongest first`}>
-          <ol className="space-y-1.5">
-            {hooks.map((hook, index) => (
-              <li key={`${hook.code ?? 'hook'}-${index}`} className="flex items-baseline gap-2.5">
+      {points.length ? (
+        <Block title="Points">
+          <ol className="space-y-2">
+            {points.map((point, index) => (
+              <li key={`${point.code ?? 'point'}-${index}`} className="flex items-baseline gap-2.5">
                 <span className="shrink-0 font-data text-micro text-ink-ghost">{index + 1}</span>
-                <span
-                  className={`max-w-[62ch] text-lg ${index === 0 ? 'text-signal' : 'text-ink-dim'}`}
-                >
-                  {hook.text}
+                <span className="min-w-0">
+                  <span className="label text-ink">{point.label}</span>
+                  {/*
+                    A point with no finding under it is marked rather than left
+                    to blend in. `BriefingPoint.code` exists for exactly this:
+                    the business signals and the history are legitimate things to
+                    say, and they are not things the audit measured.
+                  */}
+                  {point.code === null ? (
+                    <span className="ml-2 font-data text-micro text-ink-ghost">no finding</span>
+                  ) : null}
+                  <span className="mt-0.5 block max-w-[62ch] text-lg text-ink-dim">
+                    {point.detail}
+                  </span>
                 </span>
               </li>
             ))}
@@ -106,30 +114,23 @@ export function CallBriefing({ briefing }: { briefing: StoredBriefing }) {
         </Block>
       ) : null}
 
-      {evidence.length ? (
-        <Block title="Say the numbers">
-          <dl className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-            {evidence.map((item) => (
-              <div key={`${item.label}-${item.value}`} className="flex items-baseline gap-1.5">
-                <dt className="text-sm text-ink-faint">{item.label}</dt>
-                <dd className="font-data text-sm text-ink">{item.value}</dd>
+      {objections.length ? (
+        <Block title="If they say">
+          <dl className="space-y-2">
+            {objections.map((entry, index) => (
+              <div key={`${entry.objection}-${index}`}>
+                {/* Theirs, then his. Faint then full, so the eye lands on the answer. */}
+                <dt className="max-w-[62ch] text-sm text-ink-faint">“{entry.objection}”</dt>
+                <dd className="mt-0.5 max-w-[62ch] text-base text-ink-dim">{entry.reply}</dd>
               </div>
             ))}
           </dl>
         </Block>
       ) : null}
 
-      {objections.length ? (
-        <Block title="If they say">
-          <dl className="space-y-2">
-            {objections.map((entry) => (
-              <div key={entry.objection}>
-                {/* Theirs, then his. Faint then full, so the eye lands on the answer. */}
-                <dt className="max-w-[62ch] text-sm text-ink-faint">“{entry.objection}”</dt>
-                <dd className="mt-0.5 max-w-[62ch] text-base text-ink-dim">{entry.answer}</dd>
-              </div>
-            ))}
-          </dl>
+      {ask ? (
+        <Block title="Before you hang up">
+          <p className="max-w-[62ch] text-lg text-ink">{ask}</p>
         </Block>
       ) : null}
 

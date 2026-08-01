@@ -1,8 +1,14 @@
 import 'server-only'
 
-import { getBriefingProvider } from '@/lib/assistant'
+import { getAssistant } from '@/lib/assistant'
 import { buildBriefingInput } from '@/lib/assistant/briefing-input'
-import { readCachedReviews, writeBriefing, writeReviews } from '@/lib/assistant/store'
+import {
+  readCachedReviews,
+  readPreviousCalls,
+  startCall,
+  writeBriefing,
+  writeReviews,
+} from '@/lib/assistant/store'
 import type { CachedReviews } from '@/lib/assistant/store'
 import type { StoredBriefing } from '@/lib/assistant/types'
 import { readLeadDetail } from '@/lib/leads/repository'
@@ -11,26 +17,34 @@ import { BudgetExceededError, ProviderError } from '@/lib/providers/types'
 import { SpendGuard } from '@/lib/search/cost'
 
 /*
- * Preparing one call: gather, ask, write down.
+ * Preparing one call: open the attempt, gather, ask, write it down.
  *
- * The whole pass is one lead and one moment. It is not a queue, it is not
- * batched, and it has no cadence — the operator pressed a button because he is
- * about to dial, and everything here happens between that press and the page
- * redrawing.
+ * One lead and one moment. Not a queue, not batched, no cadence — the operator
+ * pressed a button because he is about to dial, and everything here happens
+ * between that press and the page redrawing.
  *
- * IT CAN SPEND MONEY, once, and only on reviews. Google prices a Places request
- * at its most expensive field and `reviews` sits in the top band, which is the
- * entire reason that call is here and not in the enrichment pass — see
- * `lib/providers/google-places/reviews.ts`. So it goes through the same
- * SpendGuard a search does, against the same ceiling, and lands in the same
- * ledger.
+ * IT OPENS A `calls` ROW, and that is the decision in this file most worth
+ * arguing with. `calls` records attempts rather than conversations, and pressing
+ * prepare is the moment the operator has decided to ring — the row is what
+ * `call_briefings.call_id` hangs off, what the tip provider will write against,
+ * and what `leads.latest_call_id` starts pointing at. The cost of being wrong is
+ * an attempt logged for a call that never happened; the cost of the alternative
+ * is a briefing with nowhere to live. `calls.outcome` is free text and exists to
+ * record exactly that kind of ending.
  *
- * A REFUSED OR FAILED REVIEW FETCH DOES NOT FAIL THE BRIEFING. That is the one
- * judgement in this file worth arguing with, so: the diagnosis is what the call
- * is built on, and reviews are colour on top of it. A ceiling that stopped the
- * operator preparing a call at all would be a cost control that had started
- * costing him work — and the briefing says out loud that it was written without
- * them, which is the honest form of degrading.
+ * IT CAN SPEND MONEY, once, and only on reviews. `reviews` is an Enterprise +
+ * Atmosphere field and Places bills a request at its most expensive field, which
+ * is why that call is here rather than in the enrichment pass. So it goes
+ * through the same SpendGuard a search does, against the same ceiling, and lands
+ * in the same ledger.
+ *
+ * A REFUSED OR FAILED REVIEW FETCH DOES NOT FAIL THE BRIEFING, and neither does
+ * a refused assistant. `types.ts` states the rule for the second — none of the
+ * three interfaces is load-bearing, and a call with no briefing is a cold call —
+ * and the first follows the same logic: the diagnosis is what the call is built
+ * on, and reviews are colour on top of it. A ceiling that stopped the operator
+ * preparing a call at all would be a cost control that had started costing him
+ * work.
  */
 
 /** The briefing, and how it got there. Returned so the route can say what happened. */
@@ -61,10 +75,7 @@ async function loadReviews(
     const { reviews } = await provider.getReviews(googlePlaceId, guard)
     return { reviews: await writeReviews(googlePlaceId, reviews), error: null, cached: false }
   } catch (error) {
-    if (error instanceof BudgetExceededError) {
-      return { reviews: null, error: error.message, cached: false }
-    }
-    if (error instanceof ProviderError) {
+    if (error instanceof BudgetExceededError || error instanceof ProviderError) {
       return { reviews: null, error: error.message, cached: false }
     }
 
@@ -76,11 +87,16 @@ async function loadReviews(
   }
 }
 
-export async function prepareBriefing(leadId: string): Promise<PreparedBriefing> {
+export async function prepareBriefing(
+  leadId: string,
+  signal?: AbortSignal,
+): Promise<PreparedBriefing> {
   const detail = await readLeadDetail(leadId)
   if (!detail) throw new Error('That lead is not in the book.')
 
   const { lead, audit, score, timeline } = detail
+
+  const call = await startCall(lead.id, lead.status)
 
   /*
    * The guard is created before anything is asked for, and it reads the ledger
@@ -89,27 +105,34 @@ export async function prepareBriefing(leadId: string): Promise<PreparedBriefing>
    * receipt rather than a limit.
    */
   const guard = await SpendGuard.create()
-  const reviews = await loadReviews(lead.googlePlaceId, guard)
+
+  const [reviews, previousCalls] = await Promise.all([
+    loadReviews(lead.googlePlaceId, guard),
+    // Excluding the row just opened: it is this call, not a previous one, and
+    // counting it would tell the assistant the operator has rung once more than
+    // he has.
+    readPreviousCalls(lead.id, call.id),
+  ])
 
   const input = buildBriefingInput({
     lead,
     audit,
     score,
     timeline,
+    previousCalls,
     reviews: reviews.reviews,
   })
 
-  const provider = getBriefingProvider()
-  const { briefing } = await provider.prepare(input, guard)
+  const assistant = getAssistant()
+  const briefing = await assistant.briefing.generate(input, { signal })
 
   const stored = await writeBriefing({
-    leadId: lead.id,
-    auditId: audit?.id ?? null,
-    scoreId: score?.id ?? null,
-    provider: provider.id,
-    model: provider.model,
-    input,
+    callId: call.id,
+    provider: assistant.id,
+    model: briefing.origin.model,
     briefing,
+    diagnosisAsOf: input.measurements.auditedAt,
+    reviewCount: input.reviews === null ? null : input.reviews.length,
   })
 
   return { briefing: stored, reviewsError: reviews.error, reviewsCached: reviews.cached }

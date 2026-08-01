@@ -1,305 +1,462 @@
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
-import type { ActivityType, LeadStatus } from '@/lib/leads/types'
-import type { CostEvent, ProviderContext } from '@/lib/providers/types'
+import type { LeadStatus, WebsiteStatus } from '@/lib/leads/types'
+import type { TipTrigger } from '@/lib/assistant/vocabulary'
 
 /*
- * The assistant boundary: what a briefing is made of, and what makes one.
+ * The assistant boundary.
  *
- * Nothing above this file knows whether a briefing was written by a language
- * model, by a rule set, or by the operator's own vocabulary rearranged. That is
- * not politeness towards a future integration — it is the current state of the
- * product. Until the model phase there is no model call, and the only provider
- * that exists composes the briefing from fixtures and from the sentences the
- * audit already wrote. When a model does arrive it satisfies this interface and
- * nothing else moves.
+ * Everything above this file — the call surface, the route handlers, the store —
+ * is written against these three interfaces and never against a model. Until
+ * Phase 17 the only implementation is a mock that reads fixtures, and that is
+ * not a placeholder to be replaced but the arrangement the surface is built
+ * against: a mock that answers instantly would let a screen be designed that
+ * cannot exist once a real call has to wait 900ms for a sentence.
  *
- * TWO HALVES, and the split is the same one `score.ts` and `store.ts` draw:
+ * THREE DECISIONS SHAPED WHAT FOLLOWS.
  *
- *   `BriefingInput`  is built by a PURE function — `briefing-input.ts` — from
- *                    rows already read. No clock, no network, no database. That
- *                    is what makes a briefing arguable: the input can be built
- *                    in a test, printed, and read against what came back.
- *   `Briefing`       is what a provider returns. Structured, never prose: the
- *                    operator is reading it thirty seconds before he dials, and
- *                    a paragraph is not readable in thirty seconds.
+ *  1. THE PROVIDERS DO NO I/O OF THEIR OWN. Every input is passed in, fully
+ *     assembled. A provider that could read the database would be a provider
+ *     that has to be mocked with a database, and the point of the split is that
+ *     `generate()` is a function of its argument — runnable in a node session,
+ *     runnable against a fixture, arguable without a network.
  *
- * Both are stored on `call_briefings`, side by side, for the reason
- * `lead_scores.factors` stores the arithmetic rather than only the number.
+ *  2. MEASUREMENTS AND JUDGEMENTS STAY APART, all the way up to here. The
+ *     briefing input carries `measurements` and `findings` under exactly those
+ *     names, because that is the split `lead_audits` and `lead_audit_findings`
+ *     draw and the one thing that must not blur on the way to a sales argument.
+ *     "PageSpeed 23" is a measurement and can be read aloud; "very slow" is a
+ *     judgement this tool made and has to be able to defend.
+ *
+ *  3. SILENCE IS A VALID ANSWER, and only the tip provider is allowed to give
+ *     it — hence `Tip | null` rather than a tip with a confidence on it. A
+ *     confidence score would push the decision onto the surface, which would
+ *     have to pick a threshold, and the threshold would be picked by whoever was
+ *     writing the component that afternoon. The provider decides, once.
+ *
+ * Nothing here is `server-only`: the call surface is a client component and
+ * speaks these types. The registry in `index.ts` is the server-only half.
  */
 
 /* ------------------------------------------------------------------------- *
- * The input
+ * Provenance
  * ------------------------------------------------------------------------- */
 
-/** The business itself, as opposed to its website. What is said before the pitch. */
-export interface BriefingBusiness {
-  name: string
-  /** The Google category, already formatted for a person — "Dentist", not `dentist`. */
-  category: string | null
-  city: string | null
-  formattedAddress: string | null
-  phone: string | null
-  website: string | null
-  /** Google's star average. The single number an owner is proudest of. */
-  rating: number | null
-  reviewCount: number | null
-}
-
-/** One piece of proof, flattened to something that can be said out loud. */
-export interface FindingEvidence {
-  label: string
-  value: string
+/**
+ * Where an answer came from, carried on every answer.
+ *
+ * The columns exist in `call_briefings` and `call_summaries` because a briefing
+ * read back in six months has to say whether a human, a fixture or a model wrote
+ * it. Stamped by the provider rather than by the store, so a provider cannot be
+ * swapped in that forgets to say who it is.
+ */
+export interface AssistantOrigin {
+  /** Registry id: `mock`, `anthropic`. Written verbatim to `provider`. */
+  provider: string
+  /**
+   * The model that answered, or null when no model was involved.
+   *
+   * Null is the mock's honest answer and must not be filled with a placeholder:
+   * `mock` in the provider column and a model name beside it would read, a year
+   * from now, as a real generation that has simply been mislabelled.
+   */
+  model: string | null
+  generatedAt: string
 }
 
 /**
- * One failed check, carried whole.
+ * Per-call environment. One field today, and it is the load-bearing one.
  *
- * `message` is verbatim from the audit, which is verbatim from `findings.ts`.
- * Those sentences were written to be said on the phone and have been argued
- * over once already; a provider that rewrites them is losing work, not adding
- * it. What a provider is for is choosing WHICH of them to say and in what
- * order — never restating the fault in worse words.
+ * A tip requested at minute four is worthless at minute five — the conversation
+ * has moved — so every request has to be abandonable, and a provider that
+ * cannot be aborted would leave the surface holding answers to questions nobody
+ * is still asking.
+ *
+ * Spend is deliberately NOT here yet. The Google boundary passes `authorizeSpend`
+ * because a paginating provider must be stoppable between pages; what the
+ * equivalent is for a token-billed call is a Phase 17 question, and inventing
+ * the hook now would mean designing it against a provider nobody has written.
+ * The rule it will have to satisfy is already written down: everything goes
+ * through the same ledger `api_usage` holds.
+ */
+export interface AssistantContext {
+  signal?: AbortSignal
+}
+
+/* ------------------------------------------------------------------------- *
+ * The lead, as the assistant sees it
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A deliberately smaller thing than `LeadRow`, for the reason `LeadPoint` is.
+ *
+ * What goes to a provider is what a person would need to open a phone call:
+ * who they are, where, what they do, how well they are thought of, and where the
+ * relationship stands. The lists, the note count, the fetch timestamps and the
+ * twenty audit columns are not that — and once a real provider is billing per
+ * token, every field in this type is a field being paid for on every call.
+ *
+ * Field names are `LeadRow`'s so a briefing and a table row cannot disagree.
+ */
+export interface AssistantLead {
+  id: string
+  name: string
+  city: string | null
+  phone: string | null
+  /** Null is the product thesis, not a missing value. See `ProviderPlace`. */
+  website: string | null
+  primaryType: string | null
+  rating: number | null
+  userRatingCount: number | null
+  status: LeadStatus
+  /** 0–100, or null when the lead was deliberately excluded from ranking. */
+  score: number | null
+}
+
+/**
+ * One judgement the audit reached, with the evidence under it.
+ *
+ * Not `AuditFinding`, which carries `passed` — by the time a briefing is being
+ * written the passes have been filtered out, and a shape that can still express
+ * "we checked and it was fine" invites a provider to argue from a clean bill of
+ * health. Everything in this list is something wrong.
  */
 export interface BriefingFinding {
   code: string
-  /** Two or three words, from the shared vocabulary. */
+  /** The short mark, from the shared vocabulary. */
   mark: string
   label: string
-  category: string
   severity: FindingSeverity
-  message: string
-  evidence: FindingEvidence[]
-  /** What `config.ts` pays for this fault. Null for a code the vocabulary lost. */
-  weight: number | null
-  /** What it actually contributed to THIS lead's score. Null when unscored. */
-  contribution: number | null
+  /** The proof, verbatim from the finding row. `{ score: 23 }`, not "very slow". */
+  value: Record<string, unknown> | null
 }
 
 /**
- * A check the site passed.
+ * What was observed, as opposed to what was concluded from it.
  *
- * Carried for one purpose: the `avoid` list. The single worst thing that can
- * happen on a cold call is opening with a fault the owner can immediately
- * disprove, and the only way to not do that is to know what is already fine.
- * The lead page has said this out loud since it was built — "Passed, do not
- * claim these are wrong" — and a briefing that did not carry it forward would
- * be a briefing that knew less than the page it sits on.
+ * A short list on purpose: these are the numbers that survive being said out
+ * loud to a stranger who can go and check them. Every field is nullable and
+ * null means "not known", never "fine".
  */
-export interface BriefingPass {
-  code: string
-  mark: string
-  message: string
-}
-
-export interface BriefingScoreFactor {
-  code: string
-  label: string
-  severity: FindingSeverity
-  weight: number
-  contribution: number
-}
-
-export interface BriefingScore {
-  /** 0–100, or null when the scorer deliberately withheld one. */
-  score: number | null
-  /** Set when `score` is null. Says which rule took the lead out, in words. */
-  excluded: { rule: string; reason: string } | null
-  /** The faults the number was built from, worst first. */
-  factors: BriefingScoreFactor[]
-  configVersion: string
-  computedAt: string
-}
-
-/** One line of what has already happened between the operator and this business. */
-export interface BriefingContact {
-  at: string
-  kind: 'note' | 'activity' | 'refresh'
-  type: ActivityType | null
-  body: string | null
-  statusBefore: LeadStatus | null
-  statusAfter: LeadStatus | null
+export interface BriefingMeasurements {
+  auditedAt: string | null
+  websiteStatus: WebsiteStatus | null
+  /** PageSpeed mobile performance, 0–100. Google's number, not this tool's. */
+  psiPerformance: number | null
+  loadMs: number | null
+  copyrightYear: number | null
+  platform: string | null
+  platformVersion: string | null
 }
 
 /**
- * What has passed between them, which decides whether this is a first call.
+ * What has already happened with this business.
  *
- * `attempts` is the number that changes the opener outright: ringing somebody
- * for the fourth time and opening as though it were the first is the mistake
- * this section exists to prevent.
+ * The one input that keeps a briefing from opening a fourth call as if it were
+ * the first. `notes` is the operator's own prose, newest first and already
+ * truncated by the caller — a provider is not the right place to decide how much
+ * of a year of notes is worth reading.
  */
 export interface BriefingHistory {
-  status: LeadStatus
-  attempts: number
-  lastContactAt: string | null
-  followUpAt: string | null
-  savedAt: string
-  /** Newest first, capped. Notes and status changes as one sequence. */
-  entries: BriefingContact[]
-}
-
-/** One review, with the person who wrote it deliberately absent. */
-export interface BriefingReview {
-  rating: number | null
-  body: string | null
-  /** Google's own phrasing — "a month ago". What the operator would say. */
-  relativeAge: string | null
-  publishedAt: string | null
-  languageCode: string | null
-}
-
-/**
- * Everything a provider is given, and nothing it is not.
- *
- * Deliberately a plain serialisable object: it is stored on the briefing row
- * whole, so what the provider saw is recoverable six weeks later without
- * re-deriving it from tables that have moved on since.
- */
-export interface BriefingInput {
-  business: BriefingBusiness
-  /** Failed checks about how the website WORKS. Worst first. */
-  faults: BriefingFinding[]
-  /**
-   * Failed checks about what the site is required to SAY — the Impressum block.
-   *
-   * Separated because it is said differently. A missing Impressum is a legal
-   * exposure with a deadline attached to it, and it sounds like a warning; a
-   * slow server is a lost customer, and it sounds like an opportunity. Mixing
-   * the two into one list makes every fault sound like whichever one was said
-   * first.
-   */
-  compliance: BriefingFinding[]
-  passed: BriefingPass[]
-  score: BriefingScore | null
-  /** Whether a phone screenshot exists to look at while the line rings. */
-  screenshot: boolean
-  history: BriefingHistory
-  reviews: BriefingReview[]
-  /**
-   * Whether reviews were looked for at all.
-   *
-   * Distinct from an empty `reviews`, which means the business has none — a
-   * fact worth mentioning on a call, and the opposite of "we did not ask".
-   */
-  reviewsFetched: boolean
-  /** Three dates, because a briefing is only as current as its worst input. */
-  asOf: {
-    /** When the Google snapshot in `business` was taken. */
-    google: string
-    /** When the audit behind `faults` ran. Null when the lead has none. */
-    diagnosis: string | null
-    /** When the reviews were fetched. Null when they were not. */
-    reviews: string | null
-  }
+  lastContactedAt: string | null
+  /** Completed calls before this one. Zero on a cold lead. */
+  previousCalls: number
+  /** How the last call was filed, from `calls.outcome`. Free text; see the vocabulary. */
+  lastOutcome: string | null
+  notes: string[]
 }
 
 /* ------------------------------------------------------------------------- *
- * The output
+ * 1. The briefing — before the phone rings
  * ------------------------------------------------------------------------- */
 
 /**
- * One reason to keep listening, in one sentence.
+ * One review, with the person who wrote it deliberately absent.
  *
- * `code` points back at the finding it rests on so the surface can put the
- * evidence beside it and the operator can check a claim before he makes it.
- * Null for a hook that rests on something other than a fault — the business's
- * own rating, say.
+ * Google returns an author's display name, photo and profile link with every
+ * review; none of it is fetched into a row and none of it reaches here. The
+ * operator needs to know that three reviews mention the parking, not who
+ * mentioned it — and once a real provider is behind this boundary, a customer's
+ * name would be a stranger's data going into somebody else's model.
  */
-export interface BriefingHook {
-  text: string
-  code: string | null
-  /**
-   * Why it sits where it sits: what this fault is worth on this lead.
-   *
-   * Carried rather than implied by array order, so a surface can say WHY the
-   * amber one is amber, and so a future provider that ranks differently has to
-   * state its reasoning in the same currency the scorer uses.
-   */
-  strength: number
+export interface BriefingReview {
+  rating: number | null
+  /** The review as written, never Google's translation of it. */
+  body: string | null
+  /** Google's own phrasing of the age — "a month ago". What a person would say. */
+  relativeAge: string | null
+  publishedAt: string | null
 }
 
-/** A number to say out loud. "PageSpeed 23", not "quite slow". */
-export interface BriefingEvidence {
+export interface BriefingInput {
+  lead: AssistantLead
+  /** Failed findings, worst first. Empty is legitimate and means: sell on something else. */
+  findings: BriefingFinding[]
+  measurements: BriefingMeasurements
+  history: BriefingHistory
+  /**
+   * What their customers said, when it was worth a request to find out.
+   *
+   * NULL AND EMPTY ARE DIFFERENT and the distinction is the whole reason this is
+   * nullable. Empty means Google was asked and this business has no reviews —
+   * which is a thing to say on a call. Null means nobody asked: the ceiling
+   * refused, Google did not answer, or the cache had expired and the operator is
+   * looking at a briefing prepared without them. A provider must not confuse a
+   * business with no reputation for one whose reputation we did not buy.
+   *
+   * Reviews are fetched on their own Places request, once, at prepare time —
+   * see `lib/providers/google-places/reviews.ts` for why they are not part of
+   * the details mask every save and refresh already pays for.
+   */
+  reviews: readonly BriefingReview[] | null
+}
+
+/** One fact worth saying, with the finding it came from. */
+export interface BriefingPoint {
+  /** Two or three words. What the eye lands on. */
   label: string
-  value: string
+  /** One sentence, ready to be said. Not a paragraph — this is read while dialling. */
+  detail: string
+  /**
+   * The finding code this point argues from, or null for a point that is not a
+   * fault — the business signals, the history, the reason to ring today.
+   *
+   * Carried so the surface can put a point beside its evidence, and so a claim
+   * with no finding under it is visible as one rather than blending in.
+   */
   code: string | null
 }
 
 export interface BriefingObjection {
-  /** What the owner says. In their words, not the operator's. */
+  /** What they will say, in their words. */
   objection: string
-  /** One answer. Not three; he has to say it while they are still talking. */
-  answer: string
+  /** The answer, in one sentence. */
+  reply: string
+  /** The live trigger this is the prepared form of, when there is one. */
+  trigger: TipTrigger | null
 }
 
 /**
- * The briefing itself. Five fields, all of them short.
+ * What the operator reads in the ten seconds before the line connects.
  *
- * `opener` is an array of sentences rather than a paragraph because it is read
- * aloud, and a reader's eye needs a place to come back to between breaths. Two
- * or three, and one of them is the consent sentence — a cold B2B call in
- * Germany is made under §7 UWG's presumed-interest test, and stating who is
- * calling and why, immediately, is both the lawful thing and the thing that
- * stops the call being hung up in four seconds.
+ * Every field is bounded by what can be read at a glance in large type, because
+ * DESIGN.md is binding and the constraint it states is the whole shape of this
+ * type: a briefing that needs scrolling is a briefing that will be read after
+ * the call instead of before it.
  */
 export interface Briefing {
-  opener: string[]
-  /** Three to five, strongest first. One sentence each. */
-  hooks: BriefingHook[]
-  evidence: BriefingEvidence[]
-  /** The three most likely, each with one answer. */
+  origin: AssistantOrigin
+  /** One line: who they are and why they are worth the call. */
+  headline: string
+  /** The opening, ready to say. One or two sentences. */
+  opening: string
+  /** Three to five. More than five is a document, and documents do not get read. */
+  points: BriefingPoint[]
   objections: BriefingObjection[]
-  /** What will not land on this lead, and why not. */
+  /** What to ask for before hanging up. One sentence, and always present. */
+  ask: string
+  /**
+   * Claims the audit does not support, named so they do not get made.
+   *
+   * The field this whole interface would be untrustworthy without. A generated
+   * briefing will reach for "you are invisible on Google" whether or not
+   * anything measured that, and the operator is going to say it to a stranger
+   * who may know better. Naming the overreach is cheaper than catching it live.
+   */
   avoid: string[]
 }
 
-/* ------------------------------------------------------------------------- *
- * The provider
- * ------------------------------------------------------------------------- */
-
-export interface BriefingResult {
-  briefing: Briefing
-  /**
-   * What producing it cost, priced at list.
-   *
-   * Empty for a provider with no external call. It is on the interface from the
-   * first day so that the model provider, when it exists, bills through
-   * `api_usage` like every other external call and the cost surface keeps
-   * telling the truth without being taught about a new kind of spend.
-   */
-  cost: CostEvent[]
-}
-
 export interface BriefingProvider {
-  /** Stable id, written to `call_briefings.provider`. */
-  readonly id: string
-  readonly label: string
-  /** The model behind it, stamped on the row. Null for a provider with none. */
-  readonly model: string | null
-
-  prepare(input: BriefingInput, ctx?: ProviderContext): Promise<BriefingResult>
+  generate(input: BriefingInput, ctx?: AssistantContext): Promise<Briefing>
 }
-
-/* ------------------------------------------------------------------------- *
- * The stored form
- * ------------------------------------------------------------------------- */
 
 /**
- * A briefing as the lead page reads it back.
+ * A briefing as a surface reads it back, with the two ages it depends on.
  *
- * `stale` is a comparison between two stored timestamps rather than a judgement
- * about the present: the lead has been audited since this was written, so the
- * faults it opens with may no longer be the faults. Same failure the diagnosis
- * already guards against, one level up.
+ * Not part of the provider contract — a provider returns a `Briefing` and knows
+ * nothing about rows — but it lives here rather than in the server-only store
+ * because the lead page is what renders it, and a client component must be able
+ * to name the shape without importing a module that opens a database.
+ *
+ * `stale` is a comparison between two stored timestamps, never a judgement about
+ * the present: the lead has been audited since this was written, so the faults
+ * it opens with may no longer be the faults. The same failure the diagnosis page
+ * already guards against, one level up and with a phone in the operator's hand.
  */
 export interface StoredBriefing {
   id: string
-  createdAt: string
+  callId: string
+  generatedAt: string
   provider: string
   model: string | null
   briefing: Briefing
+  /** When the audit it was written from ran. Null when the lead had none. */
   diagnosisAsOf: string | null
-  googleAsOf: string | null
-  reviewsAsOf: string | null
-  reviewCount: number
+  /** How many reviews it was written with. Null when it was written without them. */
+  reviewCount: number | null
   stale: boolean
+}
+
+/* ------------------------------------------------------------------------- *
+ * 2. The tip — while the line is open
+ * ------------------------------------------------------------------------- */
+
+/** Who was speaking. Stored as text; closed here because it is a closed set. */
+export type Speaker = 'operator' | 'business' | 'unknown'
+
+/**
+ * One line of the call, as the recogniser produced it.
+ *
+ * `atMs` is milliseconds from `calls.started_at`, not a wall clock. A call is a
+ * timeline of its own, and the one question ever asked of a segment is where in
+ * that timeline it sits — which stays true whether the clock skewed, whether it
+ * crossed midnight, or whether the summary is read a year later.
+ */
+export interface TranscriptSegment {
+  atMs: number
+  speaker: Speaker
+  text: string
+}
+
+/** A tip that was already put on screen, so the next one does not repeat it. */
+export interface ShownTip {
+  trigger: string
+  atMs: number
+}
+
+export interface TipContext {
+  callId: string
+  /** Where the call is now, in milliseconds since it started. */
+  atMs: number
+  lead: AssistantLead
+  /**
+   * Whether consent to transcribe has been marked, from `calls.consent_noted`.
+   *
+   * In the context rather than left to the surface because the assistant is the
+   * only thing watching the clock during a call, and consent marked at minute
+   * nine was not obtained at minute one. See `consent_not_noted` in the trigger
+   * vocabulary — this is the input that trigger exists to read.
+   */
+  consentNoted: boolean
+  /**
+   * The briefing already on screen, when there is one.
+   *
+   * Passed in so the provider can stay quiet about things the operator is
+   * already looking at. A tip that repeats a prepared objection is worse than no
+   * tip: it costs a glance and returns nothing.
+   */
+  briefing: Briefing | null
+  /**
+   * The tail of the transcript, oldest first — the last minute or so, not the
+   * whole call. Bounded by the caller because only the caller knows how much of
+   * it is still relevant, and because the whole call re-sent every few seconds
+   * is the shape of an accidental bill.
+   */
+  transcript: readonly TranscriptSegment[]
+  /** Every tip shown in this call so far. The provider is expected to not repeat itself. */
+  alreadyShown: readonly ShownTip[]
+}
+
+/**
+ * One thing worth interrupting for.
+ *
+ * `body` is short by contract, not by convention: it is read in one glance, in
+ * large type, by somebody who is mid-sentence. The bound is stated on the mock
+ * and will be stated in the real provider's prompt; the surface should truncate
+ * rather than trust, because a provider that ignores it must not be able to push
+ * the layout around during a call.
+ */
+export interface Tip {
+  origin: AssistantOrigin
+  trigger: TipTrigger
+  body: string
+}
+
+export interface TipProvider {
+  /**
+   * Null means nothing is worth saying, which is the answer most of the time.
+   *
+   * Not an error, not an empty tip, and not a tip with a low confidence: an
+   * assistant that always has something to say is an assistant that gets ignored
+   * by minute two, and then it is not there for the one moment it was built for.
+   */
+  suggest(context: TipContext, ctx?: AssistantContext): Promise<Tip | null>
+}
+
+/* ------------------------------------------------------------------------- *
+ * 3. The summary — after the line drops
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What survives the call.
+ *
+ * This is the half of a conversation that is kept: the transcript is deleted on
+ * a fourteen-day clock and this is not, which makes `body` the only record that
+ * a call happened at all once the fortnight is up. It is written to be read cold
+ * — by the operator, in six months, with no memory of the conversation.
+ */
+export interface CallSummary {
+  origin: AssistantOrigin
+  /** Prose. A short paragraph, in the operator's own register, not a bullet list. */
+  body: string
+  /**
+   * Where the lead should move to, or null when the call decided nothing.
+   *
+   * A SUGGESTION, and the schema says so too: `call_summaries.accepted` is
+   * written by the operator, not by the provider. Nothing here moves a lead —
+   * a status that changed itself because a model heard "maybe next quarter"
+   * would be a book that quietly stopped describing what the operator believes.
+   */
+  suggestedStatus: LeadStatus | null
+  /** One sentence: the next thing to do. Null when there is nothing to do. */
+  suggestedNextAction: string | null
+}
+
+export interface SummaryProvider {
+  summarise(
+    transcript: readonly TranscriptSegment[],
+    lead: AssistantLead,
+    ctx?: AssistantContext,
+  ): Promise<CallSummary>
+}
+
+/* ------------------------------------------------------------------------- *
+ * The three of them, as one thing to hold
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Three interfaces, one implementation choice.
+ *
+ * They are separate interfaces because they are separate jobs with separate
+ * inputs, and bundled here because the choice between mock and model is made
+ * once, in one place, for all three. A build that briefed from a fixture and
+ * summarised from a model would be a build whose behaviour nobody could state.
+ */
+export interface Assistant {
+  /** Stable id, written to every `provider` column. */
+  readonly id: string
+  readonly label: string
+  readonly briefing: BriefingProvider
+  readonly tip: TipProvider
+  readonly summary: SummaryProvider
+}
+
+/**
+ * An assistant refused or failed. Carries the stage so the surface can say what
+ * broke — and, more importantly, so the call can carry on without it.
+ *
+ * None of the three is load-bearing: a call with no briefing is a cold call, a
+ * call with no tips is a call, and a call with no summary is a note to write by
+ * hand. Every caller is expected to treat this as a degraded surface rather than
+ * as a failed operation.
+ */
+export class AssistantError extends Error {
+  readonly stage: 'briefing' | 'tip' | 'summary'
+  readonly status?: number
+
+  constructor(stage: AssistantError['stage'], message: string, status?: number) {
+    super(message)
+    this.name = 'AssistantError'
+    this.stage = stage
+    this.status = status
+  }
 }

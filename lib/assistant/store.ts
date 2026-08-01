@@ -1,15 +1,15 @@
 import 'server-only'
 
-import type { Briefing, BriefingInput, BriefingReview, StoredBriefing } from '@/lib/assistant/types'
+import type { Briefing, BriefingReview, StoredBriefing } from '@/lib/assistant/types'
 import type { ProviderReview } from '@/lib/providers/types'
 import { createServiceClient } from '@/lib/supabase/server'
 
 /*
  * The half that knows column names.
  *
- * `briefing-input.ts` is pure and `mock.ts` is pure; everything that touches
- * Postgres is here, which is the same split `scoring/score.ts` and
- * `scoring/store.ts` draw and for the same reason — the arithmetic has to be
+ * `briefing-input.ts` is pure and the mock provider is pure; everything that
+ * touches Postgres is here, which is the split `scoring/score.ts` and
+ * `scoring/store.ts` draw and for the same reason — the reasoning has to be
  * readable without a database in the room.
  *
  * Two caches live in this file and they are not the same kind of thing:
@@ -19,9 +19,10 @@ import { createServiceClient } from '@/lib/supabase/server'
  *   outside it costs a billable request, and "we asked and there were none" is
  *   a cached answer like any other.
  *
- *   BRIEFINGS are the operator's, permanent, and append-only. Nothing here
- *   updates one; a re-prepare writes a new row and the newest wins. The old
- *   ones are the record of what was said, which is worth more than the disk.
+ *   BRIEFINGS are the operator's, permanent, and append-only under a call.
+ *   Nothing here updates one; regenerating writes a new row and the newest
+ *   wins. The migration says why: keeping only the newest would erase the fact
+ *   that the operator opened the call on a different argument.
  */
 
 /**
@@ -29,9 +30,9 @@ import { createServiceClient } from '@/lib/supabase/server'
  *
  * Thirty days, the same window `search_results` holds Google content for, which
  * is the outer edge of Google's own caching guidance. It is stated twice — here
- * and as the column default — because the column default cannot be applied to
- * an upsert that takes the update path, and a cache that silently stopped
- * expiring would be a compliance failure rather than a performance one.
+ * and as the column default — because the column default cannot be applied to an
+ * upsert that takes the update path, and a cache that silently stopped expiring
+ * would be a compliance failure rather than a performance one.
  */
 const REVIEW_RETENTION_DAYS = 30
 
@@ -42,7 +43,6 @@ const REVIEW_RETENTION_DAYS = 30
 interface ReviewRow {
   rating: number | null
   body: string | null
-  language_code: string | null
   published_at: string | null
   relative_age: string | null
 }
@@ -73,13 +73,13 @@ export async function readCachedReviews(googlePlaceId: string): Promise<CachedRe
   if (!fetchRow) return null
 
   // A fetch that found nothing has no rows to go and get, and asking for them
-  // would be one round trip per prepare for exactly the businesses the cache
-  // was added to protect.
+  // would be one round trip per prepare for exactly the businesses the cache was
+  // added to protect.
   if (!fetchRow.review_count) return { fetchedAt: fetchRow.fetched_at, items: [] }
 
   const { data: rows, error: rowsError } = await supabase
     .from('place_reviews')
-    .select('rating, body, language_code, published_at, relative_age')
+    .select('rating, body, published_at, relative_age')
     .eq('google_place_id', googlePlaceId)
     .order('review_rank', { ascending: true })
 
@@ -92,7 +92,6 @@ export async function readCachedReviews(googlePlaceId: string): Promise<CachedRe
       body: row.body,
       relativeAge: row.relative_age,
       publishedAt: row.published_at,
-      languageCode: row.language_code,
     })),
   }
 }
@@ -100,11 +99,15 @@ export async function readCachedReviews(googlePlaceId: string): Promise<CachedRe
 /**
  * Write a fetched review set, replacing whatever was there.
  *
- * Replace rather than merge: five reviews are Google's current five, and a
- * merge would accumulate reviews that have since been deleted or hidden into a
- * set that no longer matches what the owner sees on their own listing. The
- * parent row is written LAST, so a failure halfway through leaves no fetch row
- * claiming a set that was not stored — the next prepare simply asks again.
+ * Replace rather than merge: five reviews are Google's current five, and a merge
+ * would accumulate reviews that have since been deleted or hidden into a set
+ * that no longer matches what the owner sees on his own listing.
+ *
+ * The parent row is written first because the foreign key requires it, and it
+ * carries the new timestamps immediately. A failure between the two statements
+ * therefore leaves a fresh fetch row with stale children — so the delete and
+ * insert are ordered to close that window as tightly as one round trip allows,
+ * and the fetch row is rewritten with a dead expiry if the children fail.
  */
 export async function writeReviews(
   googlePlaceId: string,
@@ -115,13 +118,6 @@ export async function writeReviews(
   const fetchedAt = new Date()
   const expiresAt = new Date(fetchedAt.getTime() + REVIEW_RETENTION_DAYS * 24 * 60 * 60 * 1000)
 
-  /*
-   * The parent has to exist before its children can reference it, and it has to
-   * be written again afterwards to move the clock. Two statements rather than
-   * one: the first satisfies the foreign key, the second is what makes the
-   * cache fresh, and doing them in that order means an interrupted write leaves
-   * a fetch row with the OLD timestamps on it, which expires and re-asks.
-   */
   const parent = {
     google_place_id: googlePlaceId,
     fetched_at: fetchedAt.toISOString(),
@@ -134,28 +130,40 @@ export async function writeReviews(
     .upsert(parent, { onConflict: 'google_place_id' })
   if (parentError) throw new Error(`Could not record the review fetch: ${parentError.message}`)
 
-  const { error: deleteError } = await supabase
-    .from('place_reviews')
-    .delete()
-    .eq('google_place_id', googlePlaceId)
-  if (deleteError) throw new Error(`Could not clear the old reviews: ${deleteError.message}`)
+  try {
+    const { error: deleteError } = await supabase
+      .from('place_reviews')
+      .delete()
+      .eq('google_place_id', googlePlaceId)
+    if (deleteError) throw new Error(`Could not clear the old reviews: ${deleteError.message}`)
 
-  if (reviews.length) {
-    const { error: insertError } = await supabase.from('place_reviews').insert(
-      reviews.map((review, index) => ({
-        google_place_id: googlePlaceId,
-        provider_review_id: review.providerReviewId,
-        review_rank: index,
-        rating: review.rating,
-        body: review.text,
-        language_code: review.languageCode,
-        published_at: review.publishedAt,
-        relative_age: review.relativeAge,
-        fetched_at: parent.fetched_at,
-        expires_at: parent.expires_at,
-      })),
-    )
-    if (insertError) throw new Error(`Could not store the reviews: ${insertError.message}`)
+    if (reviews.length) {
+      const { error: insertError } = await supabase.from('place_reviews').insert(
+        reviews.map((review, index) => ({
+          google_place_id: googlePlaceId,
+          provider_review_id: review.providerReviewId,
+          review_rank: index,
+          rating: review.rating,
+          body: review.text,
+          language_code: review.languageCode,
+          published_at: review.publishedAt,
+          relative_age: review.relativeAge,
+          fetched_at: parent.fetched_at,
+          expires_at: parent.expires_at,
+        })),
+      )
+      if (insertError) throw new Error(`Could not store the reviews: ${insertError.message}`)
+    }
+  } catch (error) {
+    /*
+     * The parent is already claiming a fresh set that is not there. Delete it
+     * rather than leave it: a fetch row with no children reads as "asked
+     * recently, this business has no reviews", which is a claim the operator
+     * might repeat on a call. Losing the cache entry costs one request; leaving
+     * it costs the truth.
+     */
+    await supabase.from('place_review_fetches').delete().eq('google_place_id', googlePlaceId)
+    throw error
   }
 
   return {
@@ -165,9 +173,65 @@ export async function writeReviews(
       body: review.text,
       relativeAge: review.relativeAge,
       publishedAt: review.publishedAt,
-      languageCode: review.languageCode,
     })),
   }
+}
+
+/* ------------------------------------------------------------------------- *
+ * Calls
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Open a call attempt.
+ *
+ * `calls` records ATTEMPTS, not conversations — the migration is explicit — so
+ * this row is written when the operator presses prepare, which is the moment he
+ * has decided to ring. `ended_at` stays null, which is what "in progress" means
+ * and what `calls_in_progress_idx` is for.
+ *
+ * `status_before` is stamped now rather than left for later. It is the whole
+ * point of that column: `leads.status` is a moving target, and a call has to
+ * stay readable months afterwards as the thing that moved it.
+ */
+export async function startCall(
+  leadId: string,
+  statusBefore: string,
+): Promise<{ id: string; startedAt: string }> {
+  const supabase = createServiceClient()
+
+  const { data, error } = await supabase
+    .from('calls')
+    .insert({ lead_id: leadId, status_before: statusBefore })
+    .select('id, started_at')
+    .single()
+
+  if (error) throw new Error(`Could not open the call: ${error.message}`)
+  return { id: data.id, startedAt: data.started_at }
+}
+
+/** Finished attempts before this one, newest first. Feeds `BriefingHistory`. */
+export async function readPreviousCalls(
+  leadId: string,
+  excludeCallId: string | null,
+): Promise<{ endedAt: string | null; outcome: string | null }[]> {
+  const supabase = createServiceClient()
+
+  let query = supabase
+    .from('calls')
+    .select('id, ended_at, outcome')
+    .eq('lead_id', leadId)
+    .order('started_at', { ascending: false })
+    .limit(20)
+
+  if (excludeCallId) query = query.neq('id', excludeCallId)
+
+  const { data, error } = await query
+  if (error) throw new Error(`Could not read the call history: ${error.message}`)
+
+  return ((data ?? []) as { ended_at: string | null; outcome: string | null }[]).map((row) => ({
+    endedAt: row.ended_at,
+    outcome: row.outcome,
+  }))
 }
 
 /* ------------------------------------------------------------------------- *
@@ -176,18 +240,14 @@ export async function writeReviews(
 
 interface BriefingRow {
   id: string
-  created_at: string
+  call_id: string
+  generated_at: string
   provider: string
   model: string | null
-  briefing: unknown
-  diagnosis_as_of: string | null
-  google_as_of: string | null
-  reviews_as_of: string | null
-  review_count: number
+  content: unknown
 }
 
-const BRIEFING_COLUMNS =
-  'id, created_at, provider, model, briefing, diagnosis_as_of, google_as_of, reviews_as_of, review_count'
+const BRIEFING_COLUMNS = 'id, call_id, generated_at, provider, model, content'
 
 /**
  * A stored jsonb blob, read back as a briefing — or not read back at all.
@@ -196,60 +256,88 @@ const BRIEFING_COLUMNS =
  * object. The surface then renders as though there were no briefing, which is
  * true in the only sense that matters: there is nothing here the operator can
  * read aloud. The same choice `compareScores` makes when a breakdown is too old
- * to interpret.
+ * to interpret, and the reason `content` is jsonb in the first place.
  */
 function toBriefing(value: unknown): Briefing | null {
   if (!value || typeof value !== 'object') return null
   const candidate = value as Partial<Briefing>
-  if (!Array.isArray(candidate.opener) || !Array.isArray(candidate.hooks)) return null
+  if (typeof candidate.opening !== 'string' || !Array.isArray(candidate.points)) return null
+  if (!candidate.origin || typeof candidate.origin !== 'object') return null
 
   return {
-    opener: candidate.opener,
-    hooks: candidate.hooks,
-    evidence: candidate.evidence ?? [],
+    origin: candidate.origin,
+    headline: candidate.headline ?? '',
+    opening: candidate.opening,
+    points: candidate.points,
     objections: candidate.objections ?? [],
+    ask: candidate.ask ?? '',
     avoid: candidate.avoid ?? [],
   }
 }
 
-function toStored(row: BriefingRow, lastAuditedAt: string | null): StoredBriefing | null {
-  const briefing = toBriefing(row.briefing)
-  if (!briefing) return null
+interface StoredMeta {
+  diagnosisAsOf: string | null
+  reviewCount: number | null
+}
 
+/**
+ * The two facts about a briefing that are not in the briefing.
+ *
+ * Read back out of the stored `content` rather than given columns of their own.
+ * `call_briefings` is a finished migration and its shape is deliberate — content
+ * is jsonb precisely so the assistant's output can carry what it needs without a
+ * schema change — so the age of the diagnosis rides inside the row this app
+ * wrote rather than beside it.
+ */
+function metaOf(value: unknown): StoredMeta {
+  const source = (value ?? {}) as Record<string, unknown>
+  const meta = (source.leadEngineMeta ?? {}) as Record<string, unknown>
   return {
-    id: row.id,
-    createdAt: row.created_at,
-    provider: row.provider,
-    model: row.model,
-    briefing,
-    diagnosisAsOf: row.diagnosis_as_of,
-    googleAsOf: row.google_as_of,
-    reviewsAsOf: row.reviews_as_of,
-    reviewCount: row.review_count,
-    /*
-     * Two stored timestamps compared, never a clock. The lead has been audited
-     * since this was written, so the faults it opens with may not be the faults
-     * any more — the same failure the diagnosis page guards against, one level
-     * up and with a phone in the operator's hand.
-     */
-    stale:
-      lastAuditedAt !== null &&
-      row.diagnosis_as_of !== null &&
-      row.diagnosis_as_of < lastAuditedAt,
+    diagnosisAsOf: typeof meta.diagnosisAsOf === 'string' ? meta.diagnosisAsOf : null,
+    reviewCount: typeof meta.reviewCount === 'number' ? meta.reviewCount : null,
   }
 }
 
+function toStored(row: BriefingRow, lastAuditedAt: string | null): StoredBriefing | null {
+  const briefing = toBriefing(row.content)
+  if (!briefing) return null
+
+  const meta = metaOf(row.content)
+
+  return {
+    id: row.id,
+    callId: row.call_id,
+    generatedAt: row.generated_at,
+    provider: row.provider,
+    model: row.model,
+    briefing,
+    diagnosisAsOf: meta.diagnosisAsOf,
+    reviewCount: meta.reviewCount,
+    stale:
+      lastAuditedAt !== null && meta.diagnosisAsOf !== null && meta.diagnosisAsOf < lastAuditedAt,
+  }
+}
+
+/**
+ * The newest briefing on the lead's newest call.
+ *
+ * Reached through `leads.latest_call_id`, which the trigger keeps pointing at
+ * the most recent attempt including one in progress — so the lead being rung
+ * right now is the lead whose briefing this returns.
+ */
 export async function readLatestBriefing(
-  leadId: string,
+  latestCallId: string | null,
   lastAuditedAt: string | null,
 ): Promise<StoredBriefing | null> {
+  if (!latestCallId) return null
+
   const supabase = createServiceClient()
 
   const { data, error } = await supabase
     .from('call_briefings')
     .select(BRIEFING_COLUMNS)
-    .eq('lead_id', leadId)
-    .order('created_at', { ascending: false })
+    .eq('call_id', latestCallId)
+    .order('generated_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
@@ -260,32 +348,37 @@ export async function readLatestBriefing(
 }
 
 export interface BriefingWrite {
-  leadId: string
-  auditId: string | null
-  scoreId: string | null
+  callId: string
   provider: string
   model: string | null
-  input: BriefingInput
   briefing: Briefing
+  diagnosisAsOf: string | null
+  reviewCount: number | null
 }
 
 export async function writeBriefing(write: BriefingWrite): Promise<StoredBriefing> {
   const supabase = createServiceClient()
 
+  /*
+   * The provenance the assistant stamped, plus the two ages only this app knows.
+   * Stored under one namespaced key rather than merged into the briefing's own
+   * fields, so nothing here can be mistaken for something a provider said.
+   */
+  const content = {
+    ...write.briefing,
+    leadEngineMeta: {
+      diagnosisAsOf: write.diagnosisAsOf,
+      reviewCount: write.reviewCount,
+    },
+  }
+
   const { data, error } = await supabase
     .from('call_briefings')
     .insert({
-      lead_id: write.leadId,
-      audit_id: write.auditId,
-      score_id: write.scoreId,
+      call_id: write.callId,
       provider: write.provider,
       model: write.model,
-      input: write.input,
-      briefing: write.briefing,
-      diagnosis_as_of: write.input.asOf.diagnosis,
-      google_as_of: write.input.asOf.google,
-      reviews_as_of: write.input.asOf.reviews,
-      review_count: write.input.reviews.length,
+      content,
     })
     .select(BRIEFING_COLUMNS)
     .single()
@@ -293,7 +386,7 @@ export async function writeBriefing(write: BriefingWrite): Promise<StoredBriefin
   if (error) throw new Error(`Could not save the briefing: ${error.message}`)
 
   // Freshly written against the audit it was built from, so it cannot be stale.
-  const stored = toStored(data as unknown as BriefingRow, write.input.asOf.diagnosis)
+  const stored = toStored(data as unknown as BriefingRow, write.diagnosisAsOf)
   if (!stored) throw new Error('The briefing was saved but could not be read back.')
   return stored
 }

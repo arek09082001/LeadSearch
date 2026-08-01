@@ -1,53 +1,48 @@
 import type {
-  BriefingContact,
+  AssistantLead,
   BriefingFinding,
   BriefingInput,
-  BriefingPass,
+  BriefingMeasurements,
   BriefingReview,
-  BriefingScore,
-  FindingEvidence,
 } from '@/lib/assistant/types'
 import { FINDING_SPECS, isFindingCode, severityRank } from '@/lib/enrichment/vocabulary'
-import { formatPlaceType } from '@/lib/places-types'
 import { SCORING_CONFIG } from '@/lib/scoring/config'
 import type { StoredScore } from '@/lib/scoring/score'
-import type { AuditFinding, LeadAudit, LeadRow, TimelineEntry } from '@/lib/leads/types'
+import type { LeadAudit, LeadRow, TimelineEntry } from '@/lib/leads/types'
 
 /*
  * Everything the assistant is told, assembled deterministically.
  *
+ * `types.ts` states that the providers do no I/O of their own and that every
+ * input arrives fully assembled. This is the half that assembles it — the only
+ * module that knows both what a `LeadDetail` looks like and what a provider is
+ * owed, and it is deliberately the boring one.
+ *
  * PURE, in the sense `score.ts` and `outcomes.ts` are pure: no database, no
  * network, and — the one worth stating — no clock. Every date in the result was
  * read off a row. That matters more here than anywhere else in the product,
- * because this is the input to something that will one day be a language model,
- * and the only way to argue with a model's answer is to be able to reproduce
- * exactly what it was asked. A builder that quietly folded in `new Date()`
- * would make yesterday's briefing unreproducible today.
+ * because this is the input to something that will be a language model, and the
+ * only way to argue with a model's answer is to reproduce exactly what it was
+ * asked. A builder that quietly folded in `new Date()` would make yesterday's
+ * briefing unreproducible today.
  *
  * The consequence to keep in mind when extending it: this function may not
- * decide anything. It selects, orders and flattens. Every sentence in it comes
- * from `findings.ts` by way of the audit, every number from `config.ts` by way
- * of the score. If a fault needs better words, the words are wrong in
- * `findings.ts` and this file must not paper over them — the audit page reads
- * the same sentences, and two versions of one claim is how a product starts
- * lying to itself.
+ * decide anything. It selects, orders and narrows. Which fault opens the call is
+ * the provider's judgement — `fixtures/index.ts` holds today's version of it —
+ * and a builder that pre-sorted by its own opinion would be making that decision
+ * twice, in two places, with no way to tell which one was in force.
  */
-
-/** History lines carried. Enough to know this is not a first call; not a diary. */
-const MAX_HISTORY = 10
 
 /**
- * How much of one note is carried.
+ * Notes carried into the briefing, newest first.
  *
- * A note may run to two thousand characters, and ten of them would be most of
- * the input. The newest lines are what change the opener — the middle of a long
- * note from March does not — so they are cut rather than dropped, and the cut is
- * visible.
+ * `types.ts` says the caller truncates because only the caller knows how much of
+ * a year of notes is worth reading. This is that decision: the last handful, cut
+ * to a length that can be read rather than skimmed. Once a model is behind the
+ * boundary every one of these is a line being paid for on every call.
  */
-const MAX_NOTE = 400
-
-/** Evidence pairs per finding. More than this is a measurement list, not proof. */
-const MAX_EVIDENCE = 4
+const MAX_NOTES = 5
+const MAX_NOTE_LENGTH = 400
 
 /** The outreach kinds that mean somebody was actually approached. */
 const CONTACT_TYPES = new Set(['call', 'email', 'message', 'visit', 'meeting'])
@@ -57,72 +52,21 @@ const CONTACT_TYPES = new Set(['call', 'email', 'message', 'visit', 'meeting'])
  * ------------------------------------------------------------------------- */
 
 /**
- * The rows this is built from — `LeadDetail` minus the parts a briefing has no
- * use for, plus the reviews, which no other surface reads.
+ * The rows this is built from — `LeadDetail` minus what a briefing has no use
+ * for, plus the two things no other surface reads.
  *
- * Reviews arrive as an object rather than an array so that "fetched, and there
- * were none" is expressible. Those two states cost differently and read
- * differently: a business with no reviews at all is worth mentioning on a call,
- * and a business nobody asked about is worth asking about.
+ * Reviews arrive as an object rather than a bare array so that "fetched, and
+ * there were none" is expressible; see `BriefingInput.reviews`.
  */
 export interface BriefingSource {
   lead: LeadRow
   audit: LeadAudit | null
+  /** Read for the failed codes' weights only — the score itself is on the lead. */
   score: StoredScore | null
   timeline: TimelineEntry[]
-  reviews: { fetchedAt: string; items: BriefingReview[] } | null
-}
-
-/* ------------------------------------------------------------------------- *
- * Evidence
- * ------------------------------------------------------------------------- */
-
-/**
- * `expiredMonthsAgo` becomes `expired months ago`. Enough to say out loud.
- *
- * The inserted words are lowercased as well as separated. Splitting alone
- * leaves `lcpMs` reading as "lcp Ms" — which is not merely ugly: these labels
- * are how `fixtures/phrasing.ts` finds a measurement again, so a stray capital
- * is a lookup that silently returns nothing and an evidence line that silently
- * does not appear.
- */
-function humanKey(key: string): string {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, (_, before: string, after: string) => `${before} ${after.toLowerCase()}`)
-    .replace(/^./, (first) => first.toLowerCase())
-}
-
-function humanValue(value: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null
-  if (Array.isArray(value)) return value.length ? value.join(', ') : null
-  if (typeof value === 'boolean') return value ? 'yes' : 'no'
-  if (typeof value === 'number') {
-    return Number.isInteger(value) ? String(value) : value.toFixed(2)
-  }
-  return String(value).slice(0, 160)
-}
-
-/**
- * The proof under one claim, flattened.
- *
- * `reportUrl` is dropped: it is a link to go and check, which is exactly what
- * nobody does while a phone is ringing. Everything else the check recorded is
- * carried through generically, so a criterion that starts recording a new
- * measurement carries it into the briefing without anybody editing this file —
- * the same bargain the diagnosis page makes.
- */
-function evidenceOf(value: Record<string, unknown> | null): FindingEvidence[] {
-  if (!value) return []
-
-  const pairs: FindingEvidence[] = []
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === 'reportUrl') continue
-    const text = humanValue(entry)
-    if (text === null) continue
-    pairs.push({ label: humanKey(key), value: text })
-    if (pairs.length === MAX_EVIDENCE) break
-  }
-  return pairs
+  /** Finished call attempts before this one, newest first. */
+  previousCalls: { endedAt: string | null; outcome: string | null }[]
+  reviews: { items: BriefingReview[] } | null
 }
 
 /* ------------------------------------------------------------------------- *
@@ -130,48 +74,81 @@ function evidenceOf(value: Record<string, unknown> | null): FindingEvidence[] {
  * ------------------------------------------------------------------------- */
 
 /**
- * What one fault is worth on THIS lead.
+ * What one fault is worth on THIS lead, for ordering only.
  *
  * The score's own contribution first, because it already accounts for position:
  * the scorer applies a diminishing rule, so the fourth fault on a lead is worth
- * less than the same fault would be on a lead that has only that one. Falling
- * back to the configured weight keeps an unscored lead orderable, and zero is
- * the floor for a code the vocabulary no longer knows.
+ * less than the same fault would be on a lead carrying only that one. Falling
+ * back to the configured weight keeps an unscored lead orderable, and severity
+ * breaks the tie for a code the vocabulary no longer knows.
  */
-function strengthOf(finding: BriefingFinding): number {
-  return finding.contribution ?? finding.weight ?? 0
+function ordering(contributions: Map<string, number>) {
+  return (a: BriefingFinding, b: BriefingFinding): number => {
+    const strength = strengthOf(b, contributions) - strengthOf(a, contributions)
+    if (strength !== 0) return strength
+    const severity = severityRank(a.severity) - severityRank(b.severity)
+    return severity !== 0 ? severity : a.code.localeCompare(b.code)
+  }
 }
 
-function byStrength(a: BriefingFinding, b: BriefingFinding): number {
-  const strength = strengthOf(b) - strengthOf(a)
-  if (strength !== 0) return strength
-  const severity = severityRank(a.severity) - severityRank(b.severity)
-  return severity !== 0 ? severity : a.code.localeCompare(b.code)
+function strengthOf(finding: BriefingFinding, contributions: Map<string, number>): number {
+  const contribution = contributions.get(finding.code)
+  if (contribution !== undefined) return contribution
+  return isFindingCode(finding.code) ? SCORING_CONFIG.points[finding.code] : 0
 }
 
-function toFinding(
-  finding: AuditFinding,
-  contributions: Map<string, number>,
-): BriefingFinding {
-  // Aliased so the type guard narrows for both lookups below. `finding.code` is
-  // a property of a parameter and the checker will not carry a guard on it into
-  // a later expression.
-  const code = finding.code
-  const spec = isFindingCode(code) ? FINDING_SPECS[code] : null
+/**
+ * The failed findings, worst first, with their evidence verbatim.
+ *
+ * `value` is passed through untouched rather than flattened into strings.
+ * `types.ts` is explicit that this is where "PageSpeed 23" stays a measurement
+ * instead of becoming the judgement "very slow", and the mock's `fill` reads
+ * these keys directly — a builder that pre-formatted them would be a builder
+ * deciding how a number gets said.
+ *
+ * Passing findings are dropped here rather than carried and filtered later,
+ * because the shape a provider receives cannot express one: see the note on
+ * `BriefingFinding`.
+ */
+function findingsOf(audit: LeadAudit | null, contributions: Map<string, number>): BriefingFinding[] {
+  const failed = (audit?.findings ?? [])
+    .filter((finding) => !finding.passed)
+    .map((finding): BriefingFinding => {
+      // Aliased so the type guard narrows for the lookup below; `finding.code`
+      // is a property of a parameter and the checker will not carry a guard on
+      // it into a later expression.
+      const code = finding.code
+      const spec = isFindingCode(code) ? FINDING_SPECS[code] : null
 
+      return {
+        code,
+        // A code this vocabulary has since dropped keeps its own name rather
+        // than disappearing. It was measured and it was written down, and a
+        // briefing shorter than the diagnosis beside it is a briefing that
+        // quietly stopped agreeing with the page it sits on.
+        mark: spec?.mark ?? code,
+        label: spec?.label ?? code,
+        severity: finding.severity,
+        value: finding.value,
+      }
+    })
+
+  return failed.sort(ordering(contributions))
+}
+
+/* ------------------------------------------------------------------------- *
+ * Measurements
+ * ------------------------------------------------------------------------- */
+
+function measurementsOf(audit: LeadAudit | null): BriefingMeasurements {
   return {
-    code,
-    // A code this vocabulary has since dropped keeps its own name rather than
-    // disappearing. It was measured, it was written down, and a briefing that
-    // silently omitted it would be shorter than the diagnosis beside it.
-    mark: spec?.mark ?? finding.code,
-    label: spec?.label ?? finding.code,
-    category: finding.category,
-    severity: finding.severity,
-    message: finding.message,
-    evidence: evidenceOf(finding.value),
-    weight: isFindingCode(code) ? SCORING_CONFIG.points[code] : null,
-    contribution: contributions.get(code) ?? null,
+    auditedAt: audit?.auditedAt ?? null,
+    websiteStatus: audit?.websiteStatus ?? null,
+    psiPerformance: audit?.psiPerformance ?? null,
+    loadMs: audit?.loadMs ?? null,
+    copyrightYear: audit?.copyrightYear ?? null,
+    platform: audit?.platform ?? null,
+    platformVersion: audit?.platformVersion ?? null,
   }
 }
 
@@ -179,64 +156,75 @@ function toFinding(
  * History
  * ------------------------------------------------------------------------- */
 
-function toContact(entry: TimelineEntry): BriefingContact {
-  return {
-    at: entry.at,
-    kind: entry.kind,
-    type: entry.type,
-    body: entry.body === null ? null : entry.body.slice(0, MAX_NOTE),
-    statusBefore: entry.statusBefore,
-    statusAfter: entry.statusAfter,
-  }
-}
-
 /**
  * What has already passed between the operator and this business.
  *
- * Refresh entries are deliberately excluded. They record what Google changed its
- * mind about, which is a fact about the data rather than about the relationship,
- * and the faults already carry whatever it did to the diagnosis. What belongs
- * here is only what somebody did: a call, a note, a status moved by hand.
+ * TWO SOURCES, because they answer two different questions. `calls` says how
+ * many times the phone has been picked up and how the last one was filed; the
+ * timeline says what he wrote down. A briefing built from only the first would
+ * open a fourth call as though it were the first if the earlier three predate
+ * the calls table.
+ *
+ * Refresh entries are excluded from the notes. They record what Google changed
+ * its mind about, which is a fact about the data rather than about the
+ * relationship, and the findings already carry whatever it did to the diagnosis.
  */
-function historyOf(lead: LeadRow, timeline: TimelineEntry[]): BriefingInput['history'] {
+function historyOf(
+  lead: LeadRow,
+  timeline: TimelineEntry[],
+  previousCalls: BriefingSource['previousCalls'],
+): BriefingInput['history'] {
   const own = timeline.filter((entry) => entry.kind !== 'refresh')
 
   const contacts = own.filter(
     (entry) => entry.kind === 'activity' && entry.type !== null && CONTACT_TYPES.has(entry.type),
   )
 
+  /*
+   * The most recent contact of any kind, from whichever source saw it last.
+   * Both arrive newest first, so this is a comparison of two heads rather than a
+   * scan — and it is a comparison of stored timestamps, never of one against a
+   * clock.
+   */
+  const lastLogged = contacts[0]?.at ?? null
+  const lastCalled = previousCalls.find((call) => call.endedAt !== null)?.endedAt ?? null
+  const lastContactedAt =
+    lastLogged && lastCalled ? (lastLogged > lastCalled ? lastLogged : lastCalled) : (lastLogged ?? lastCalled)
+
   return {
-    status: lead.status,
-    attempts: contacts.length,
-    // The timeline arrives newest first, so the first contact in it is the last
-    // one that happened. Read rather than computed, like every other date here.
-    lastContactAt: contacts[0]?.at ?? null,
-    followUpAt: lead.followUpAt,
-    savedAt: lead.savedAt,
-    entries: own.slice(0, MAX_HISTORY).map(toContact),
+    lastContactedAt,
+    previousCalls: previousCalls.length,
+    lastOutcome: previousCalls.find((call) => call.outcome !== null)?.outcome ?? null,
+    notes: own
+      .filter((entry) => entry.kind === 'note' && entry.body)
+      .slice(0, MAX_NOTES)
+      .map((entry) => entry.body!.slice(0, MAX_NOTE_LENGTH)),
   }
 }
 
 /* ------------------------------------------------------------------------- *
- * Score
+ * The lead
  * ------------------------------------------------------------------------- */
 
-function scoreOf(stored: StoredScore | null): BriefingScore | null {
-  if (!stored?.breakdown) return null
-  const { breakdown } = stored
-
+/**
+ * `LeadRow` narrowed to what a person needs to open a phone call.
+ *
+ * Deliberately a copy rather than a spread of the row. Once a model is billing
+ * per token every field here is being paid for on every call, and a spread would
+ * mean the next column added to `LeadRow` silently joins the prompt.
+ */
+function leadOf(lead: LeadRow): AssistantLead {
   return {
-    score: breakdown.score,
-    excluded: breakdown.excluded,
-    factors: breakdown.factors.map((factor) => ({
-      code: factor.code,
-      label: factor.label,
-      severity: factor.severity,
-      weight: factor.weight,
-      contribution: factor.contribution,
-    })),
-    configVersion: stored.configVersion,
-    computedAt: stored.computedAt,
+    id: lead.id,
+    name: lead.name,
+    city: lead.city,
+    phone: lead.phone ?? lead.imprintPhone,
+    website: lead.website,
+    primaryType: lead.primaryType,
+    rating: lead.rating,
+    userRatingCount: lead.userRatingCount,
+    status: lead.status,
+    score: lead.score,
   }
 }
 
@@ -245,58 +233,17 @@ function scoreOf(stored: StoredScore | null): BriefingScore | null {
  * ------------------------------------------------------------------------- */
 
 export function buildBriefingInput(source: BriefingSource): BriefingInput {
-  const { lead, audit, score, timeline, reviews } = source
+  const { lead, audit, score, timeline, previousCalls, reviews } = source
 
   const contributions = new Map(
     (score?.breakdown?.factors ?? []).map((factor) => [factor.code, factor.contribution]),
   )
 
-  const failed = (audit?.findings ?? [])
-    .filter((finding) => !finding.passed)
-    .map((finding) => toFinding(finding, contributions))
-
-  /*
-   * Compliance is split out by category rather than by a hand-kept list of
-   * codes. `vocabulary.ts` already draws exactly this line — `compliance` is the
-   * Impressum, the privacy policy, the things loaded from Google's servers
-   * without asking — and re-deriving it here from a list would be a second
-   * definition of the same idea, guaranteed to drift the first time a check is
-   * added.
-   */
-  const compliance = failed.filter((finding) => finding.category === 'compliance').sort(byStrength)
-  const faults = failed.filter((finding) => finding.category !== 'compliance').sort(byStrength)
-
-  const passed: BriefingPass[] = (audit?.findings ?? [])
-    .filter((finding) => finding.passed)
-    .map((finding) => ({
-      code: finding.code,
-      mark: isFindingCode(finding.code) ? FINDING_SPECS[finding.code].mark : finding.code,
-      message: finding.message,
-    }))
-
   return {
-    business: {
-      name: lead.name,
-      category: lead.primaryType ? formatPlaceType(lead.primaryType) : null,
-      city: lead.city,
-      formattedAddress: lead.formattedAddress,
-      phone: lead.phone ?? lead.imprintPhone,
-      website: lead.website,
-      rating: lead.rating,
-      reviewCount: lead.userRatingCount,
-    },
-    faults,
-    compliance,
-    passed,
-    score: scoreOf(score),
-    screenshot: Boolean(audit?.screenshotPath),
-    history: historyOf(lead, timeline),
-    reviews: reviews?.items ?? [],
-    reviewsFetched: reviews !== null,
-    asOf: {
-      google: lead.fetchedAt,
-      diagnosis: audit?.auditedAt ?? null,
-      reviews: reviews?.fetchedAt ?? null,
-    },
+    lead: leadOf(lead),
+    findings: findingsOf(audit, contributions),
+    measurements: measurementsOf(audit),
+    history: historyOf(lead, timeline, previousCalls),
+    reviews: reviews?.items ?? null,
   }
 }

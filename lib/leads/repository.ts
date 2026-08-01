@@ -1292,13 +1292,28 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   if (!lead) return null
 
   /*
-   * The briefing is read after the lead rather than beside it, because whether
-   * it is stale is a comparison against `lead.last_audited_at` and that number
-   * has to be in hand first. One more round trip on a page that already makes
-   * four, in exchange for the staleness question being answered in the store
-   * instead of on the surface.
+   * The briefing hangs off the newest call, and the newest call is what
+   * `leads.latest_call_id` points at — maintained by trigger, like
+   * `latest_audit_id`. Read straight off `leads` rather than through
+   * `leads_library`: the view is a read model for the table and the map, nothing
+   * there filters or sorts on a call, and lifting a column into it that a
+   * hundred-row page would carry for nobody is the trade the imprint migration
+   * already refused once.
+   *
+   * After the lead rather than beside it, because whether the briefing is stale
+   * is a comparison against `lead.lastAuditedAt` and that number has to be in
+   * hand first.
    */
-  const briefing = await readLatestBriefing(id, lead.lastAuditedAt)
+  const { data: callPointer } = await supabase
+    .from('leads')
+    .select('latest_call_id')
+    .eq('id', id)
+    .maybeSingle()
+
+  const briefing = await readLatestBriefing(
+    (callPointer?.latest_call_id as string | null) ?? null,
+    lead.lastAuditedAt,
+  )
 
   const movement = compareScores(previousScore, score)
 

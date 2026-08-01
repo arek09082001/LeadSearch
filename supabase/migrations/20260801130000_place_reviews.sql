@@ -1,34 +1,35 @@
--- Lead Engine — what to say when they pick up.
+-- Lead Engine — what their customers said, bought once per call.
 --
--- Everything before this migration answers "is this business worth phoning".
--- The book is ranked, the diagnosis is written, the evidence is under every
--- claim. None of it answers the question the operator actually has at the
--- moment he dials, which is what the first sentence out of his mouth should be.
+-- The migration before this one gave the assistant somewhere to put a briefing.
+-- This one gives it the last input it was missing: the business's own reviews,
+-- which are the only thing a call briefing is built from that is neither a
+-- measurement this tool took nor a judgement this tool made. They are what the
+-- owner reads about himself, and they are the half of the conversation he did
+-- not write.
 --
--- Three tables, and they fall on both sides of the split this schema has drawn
--- since the first migration:
+-- WHY REVIEWS ARE FETCHED HERE AND NOT WITH EVERYTHING ELSE, because it is the
+-- decision this whole file exists to serve. Google prices a Places request at
+-- the most expensive field in its mask, and `reviews` is an Enterprise +
+-- Atmosphere field. Adding it to the Place Details mask the rest of the app uses
+-- would lift EVERY save and EVERY nightly refresh into the top band — for a book
+-- of a thousand leads, of which perhaps forty are ever rung. So reviews are
+-- their own call, made once, seconds before the phone is picked up, and billed
+-- through api_usage like everything else. The arithmetic stays the operator's
+-- own: refreshing the book costs what refreshing the book costs, and reviews
+-- cost one request each time he decides to phone somebody.
 --
---   1. place_review_fetches / place_reviews — TRANSIENT. Google content, on a
---      clock, deleted by a scheduled job exactly like search_results.
---   2. call_briefings                       — PERMANENT. The operator's own
---      work product, kept for as long as the lead is.
---
--- WHY REVIEWS ARE FETCHED HERE AND NOT WITH EVERYTHING ELSE. Google prices a
--- Places request at the most expensive field in its mask, and `reviews` is an
--- Enterprise + Atmosphere field. Adding it to the Place Details mask the rest of
--- the app uses would lift every save and every nightly refresh into the top
--- band — for a book of a thousand leads, of which perhaps forty are ever rung.
--- So reviews are their own call, made once, seconds before the phone is picked
--- up, and billed through api_usage like everything else. The arithmetic is then
--- the operator's own: refreshing the book costs what refreshing the book costs,
--- and reviews cost one request each time he decides to phone somebody.
+-- Both tables are on the TRANSIENT side of the split, treated exactly as
+-- `search_results` is: thirty days, deleted by a scheduled job, gone whether or
+-- not the app is awake. This is Google content held under Google's terms.
 --
 -- ON THE PEOPLE WHO WROTE THEM. Google returns an author's display name, photo
 -- and profile link with every review. None of it is stored, for the same reason
 -- the Impressum check does not extract the natural person it is legally certain
 -- to find: the operator needs to know that three reviews mention the parking,
 -- not who mentioned it. There is no column here for a name, so there is no way
--- for one to arrive by accident.
+-- for one to arrive by accident — and once a model sits behind the assistant
+-- boundary, that is the difference between sending it a business's reputation
+-- and sending it a stranger's identity.
 
 -- ---------------------------------------------------------------------------
 -- place_review_fetches — that we asked, and when.
@@ -38,8 +39,8 @@
 -- states look identical in an empty result set and they cost differently — the
 -- first should never be asked about again inside the retention window, the
 -- second must be. Without this table every prepare for a business with no
--- reviews would spend a fresh Enterprise + Atmosphere request to rediscover
--- that there is nothing there.
+-- reviews would spend a fresh Enterprise + Atmosphere request to rediscover that
+-- there is nothing there.
 --
 -- It is exactly the shape `searches` has over `search_results`: the fetch is the
 -- parent, its rows hang off it, and expiring the parent takes the content with
@@ -78,7 +79,8 @@ create index place_review_fetches_expires_at_idx
 -- `review_rank` preserves the order Google returned them in. Google's default
 -- ordering is its own idea of relevance, and re-sorting by date or by rating
 -- here would quietly turn "their most prominent reviews" into something else —
--- which is not what the operator will be looking at on his phone when he checks.
+-- which is not what the owner sees when he looks at his own listing, and he is
+-- the person on the other end of the call.
 -- ---------------------------------------------------------------------------
 create table public.place_reviews (
   id                 uuid        primary key default gen_random_uuid(),
@@ -95,8 +97,8 @@ create table public.place_reviews (
   language_code      text,
   published_at       timestamptz,
   -- Google's own phrasing of the age — "a month ago" — kept verbatim because it
-  -- is what the operator would say out loud, and because it survives the
-  -- publish time being absent.
+  -- is what the operator would say out loud, and because it survives the publish
+  -- time being absent.
   relative_age       text,
 
   fetched_at         timestamptz not null default now(),
@@ -125,8 +127,9 @@ create index place_reviews_expires_at_idx
 -- ---------------------------------------------------------------------------
 -- expire_place_reviews — the retention promise, kept by the database.
 --
--- In the database rather than in a Vercel cron for the reason the search-result
--- job gives: if the app goes dark for a month, Google content still expires.
+-- The fifth of these jobs, beside the search results, the geocodes, the deleted
+-- leads and the call transcripts. Same argument every time: if the app goes dark
+-- for a month, the content still expires.
 --
 -- Parents first, so the cascade does the bulk of the work and the second delete
 -- only ever catches a row whose expiry was written by hand. Deleting the rows
@@ -134,6 +137,8 @@ create index place_reviews_expires_at_idx
 -- fetch row claiming three reviews with none behind it — which is the one state
 -- the reader must never see, because it reads as "asked recently, found none".
 -- ---------------------------------------------------------------------------
+create extension if not exists pg_cron;
+
 create or replace function public.expire_place_reviews()
 returns integer
 language plpgsql
@@ -157,79 +162,19 @@ $$;
 revoke all on function public.expire_place_reviews() from public, anon, authenticated;
 
 comment on function public.expire_place_reviews() is
-  'Deletes Google-sourced review content past its retention window. Scheduled nightly via pg_cron, alongside the search-result and geocode jobs.';
+  'Deletes Google-sourced review content past its retention window. Scheduled nightly via pg_cron, alongside the search-result, geocode and transcript jobs.';
 
--- 03:25 UTC daily — between the search results (03:15) and the geocodes (03:20)
--- would be neater, but those two are already scheduled and moving them would
--- rewrite a finished migration. Five minutes later costs nothing.
+-- 04:10 UTC daily, after the transcripts at 04:00 and the three jobs that were
+-- already there. Serial rather than simultaneous because these are all deletes
+-- on the same small database and there is nothing to gain by overlapping them.
 select cron.schedule(
   'expire-place-reviews',
-  '25 3 * * *',
+  '10 4 * * *',
   $$select public.expire_place_reviews()$$
 );
 
 -- ---------------------------------------------------------------------------
--- call_briefings — the permanent half.
---
--- Append-only, exactly like lead_scores, and for the same reason: a briefing is
--- an artefact of a moment. It was written from one audit, one score and one set
--- of reviews, and six weeks later the operator is entitled to know which. A
--- table that updated in place would answer "what does the assistant say now",
--- which is a question nobody asks while holding a phone.
---
--- BOTH SIDES ARE STORED. `input` is what the provider was given; `briefing` is
--- what it gave back. Keeping the input is what makes a briefing arguable rather
--- than merely present — the same reason `lead_scores.factors` keeps the
--- arithmetic instead of only the number. It also means a bad briefing can be
--- re-run against a changed prompt without going back to Google for anything.
---
--- `provider` and `model` are stamped for the same reason `checker_version` is:
--- the mock that writes these today is not the model that will write them later,
--- and a briefing read cold must say which one it came from.
--- ---------------------------------------------------------------------------
-create table public.call_briefings (
-  id              uuid        primary key default gen_random_uuid(),
-  lead_id         uuid        not null references public.leads (id) on delete cascade,
-
-  -- The diagnosis it was written from. `on delete set null` rather than cascade:
-  -- an audit can be pruned, and a briefing that outlived its audit is still a
-  -- record of what was said — `diagnosis_as_of` keeps it explainable.
-  audit_id        uuid        references public.lead_audits (id) on delete set null,
-  score_id        uuid        references public.lead_scores (id) on delete set null,
-
-  provider        text        not null,      -- 'mock' until a model is wired in
-  model           text,                      -- null for a provider with no model
-
-  input           jsonb       not null,      -- what the provider was handed
-  briefing        jsonb       not null,      -- opener, hooks, evidence, objections, avoid
-
-  -- Three ages, because a briefing is only as current as its worst input and
-  -- the surface has to be able to say so. PRODUCT.md's fifth principle applied
-  -- to a thing that is itself derived from three dated sources.
-  diagnosis_as_of timestamptz,
-  google_as_of    timestamptz,
-  reviews_as_of   timestamptz,
-  review_count    integer     not null default 0,
-
-  created_at      timestamptz not null default now(),
-
-  constraint call_briefings_review_count_non_negative check (review_count >= 0)
-);
-
-comment on table public.call_briefings is
-  'What to open the call with, generated from the diagnosis. Append-only: a briefing is an artefact of the moment it was written, and the moment is half the record.';
-comment on column public.call_briefings.input is
-  'The exact structured input the provider was given, built by a pure function. Stored so a briefing can be argued with, and re-run under a different prompt without a second Google request.';
-comment on column public.call_briefings.diagnosis_as_of is
-  'When the audit this was written from ran. The number that decides whether a briefing is still worth reading, and it is not the same as created_at.';
-
--- The only question ever asked of this table: what is the newest briefing for
--- this lead. Everything older is history, read the same way audits are.
-create index call_briefings_lead_id_created_at_idx
-  on public.call_briefings (lead_id, created_at desc);
-
--- ---------------------------------------------------------------------------
--- Lockdown. The three tables are new, so the blanket revokes in
+-- Lockdown. Both tables are new, so the blanket revokes in
 -- 20260730180300_lockdown.sql ran before they existed. The default privileges
 -- set there stop anon/authenticated inheriting anything; these lines are the
 -- belt to that pair of braces, and they are what the first migration promised
@@ -237,8 +182,6 @@ create index call_briefings_lead_id_created_at_idx
 -- ---------------------------------------------------------------------------
 alter table public.place_review_fetches enable row level security;
 alter table public.place_reviews        enable row level security;
-alter table public.call_briefings       enable row level security;
 
 revoke all on public.place_review_fetches from anon, authenticated;
 revoke all on public.place_reviews        from anon, authenticated;
-revoke all on public.call_briefings       from anon, authenticated;
