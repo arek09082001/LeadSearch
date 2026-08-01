@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 
 import { CallAssistant } from '@/components/calls/call-assistant'
 import { CallBriefing } from '@/components/leads/call-briefing'
-import { readCall, readLatestBriefing, readSegments } from '@/lib/assistant/store'
+import { readCall, readLatestBriefing, readSegments, readTips } from '@/lib/assistant/store'
 import { readLead } from '@/lib/leads/repository'
 
 /*
@@ -48,9 +48,18 @@ export default async function CallPage({ params }: Props) {
   // gone is a row that should not exist rather than a page to render around.
   if (!lead) notFound()
 
-  const [briefing, segments] = await Promise.all([
+  /*
+   * The tips come back with the transcript, and for the same reason.
+   *
+   * A trigger fires once per call, and "once" has to survive a reload — a
+   * stray Ctrl-R at minute six would otherwise re-open the page ready to say
+   * everything it has already said. Only the trigger and its timestamp are
+   * needed for that, which is all `ShownTip` is.
+   */
+  const [briefing, segments, tips] = await Promise.all([
     readLatestBriefing(call.id, lead.lastAuditedAt),
     readSegments(call.id),
+    readTips(call.id),
   ])
 
   return (
@@ -63,6 +72,13 @@ export default async function CallPage({ params }: Props) {
       consentNoted={call.consentNoted}
       closed={call.endedAt !== null}
       initialSegments={segments}
+      initialTips={tips.map((tip) => ({ trigger: tip.trigger, atMs: tip.atMs }))}
+      /*
+       * The briefing twice: once as data for the rules, once as markup for the
+       * eye. See `CallAssistantProps.prepared` for why neither can stand in for
+       * the other.
+       */
+      prepared={briefing?.briefing ?? null}
       /*
        * Rendered here and passed through as a node. `CallBriefing` is a server
        * component and the surface around it is a client one — so it is composed
