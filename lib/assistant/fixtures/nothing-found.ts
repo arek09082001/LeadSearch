@@ -16,6 +16,8 @@ import type { AssistantFixture } from '@/lib/assistant/fixtures/types'
  * defending. A briefing that failed on a clean lead would leave exactly the case
  * the operator most needs help with — a business he has no easy angle on —
  * staring at an error message.
+ *
+ * German strings, English comments; see the note in `no-website.ts`.
  */
 export const NOTHING_FOUND: AssistantFixture = {
   key: 'nothing_found',
@@ -26,95 +28,99 @@ export const NOTHING_FOUND: AssistantFixture = {
   requiresWebsite: null,
 
   briefing: {
-    headline: '{name} — nothing broken. This one is sold on the business, not the site.',
+    headline: '{name} — nichts kaputt. Der hier wird über den Betrieb verkauft, nicht über die Seite.',
     opening:
-      'Good morning — I look at how businesses in {city} come across online, and yours is in better shape than most of what I see. ' +
-      'That is actually why I am calling.',
+      'Guten Morgen — ich schaue mir an, wie Betriebe in {city} online dastehen, und Ihrer steht besser da als das meiste, was ich sehe. ' +
+      'Deswegen rufe ich eigentlich an.',
     points: [
       {
-        label: 'No fault to open on',
-        detail: 'The check found nothing worth arguing from. Do not go looking for one on the call.',
+        label: 'Kein Aufhänger',
+        detail:
+          'Die Prüfung hat nichts gefunden, womit sich argumentieren ließe. Im Gespräch auch nicht danach suchen.',
         code: null,
       },
       {
-        label: '{rating}★, {reviews} reviews',
-        detail: 'Well thought of. That is the thing worth talking about, and it is the thing they are proud of.',
+        label: '{rating}★, {reviews} Bewertungen',
+        detail:
+          'Gut angesehen. Das ist das Thema, über das es sich zu reden lohnt, und das, worauf sie stolz sind.',
         code: null,
       },
       {
-        label: 'Ask, do not tell',
-        detail: 'You have no diagnosis to lead with, so the first two minutes are questions.',
+        label: 'Fragen statt erzählen',
+        detail:
+          'Es gibt keinen Befund, mit dem sich anfangen ließe. Die ersten zwei Minuten sind deshalb Fragen.',
         code: null,
       },
       {
-        label: 'A short call is a good outcome',
-        detail: 'No angle means no reason to keep them. Find out what they want next, or get off the phone.',
+        label: 'Kurz ist hier gut',
+        detail:
+          'Kein Aufhänger heißt kein Grund, sie festzuhalten. Herausfinden, was als Nächstes ansteht, oder auflegen.',
         code: null,
       },
     ],
     objections: [
       {
-        objection: 'What is this about, exactly?',
+        objection: 'Worum geht es denn genau?',
         reply:
-          'Honestly — you came up as one of the better ones and I wanted to know what you are working on next.',
+          'Ehrlich gesagt — Sie sind mir als einer der besseren aufgefallen, und ich wollte wissen, was bei Ihnen als Nächstes ansteht.',
         trigger: null,
       },
       {
-        objection: 'We are not looking for anything.',
-        reply: 'Understood. Can I ask one question and then leave you alone?',
+        objection: 'Wir suchen nichts.',
+        reply: 'Verstanden. Darf ich eine Frage stellen und Sie dann in Ruhe lassen?',
         trigger: 'happy_as_is',
       },
       {
-        objection: 'What does it cost?',
-        reply: 'Nothing to quote yet — I do not know what you would want doing.',
+        objection: 'Was kostet das?',
+        reply: 'Da gibt es noch nichts zu beziffern — ich weiß ja nicht, was Sie gemacht haben wollen.',
         trigger: 'price_question',
       },
     ],
-    ask: 'One question: what would you change about how people find you, if it were free?',
+    ask: 'Eine Frage: Was würden Sie daran ändern, wie Leute Sie finden, wenn es umsonst wäre?',
     avoid: [
-      'Do not invent a fault. The audit found none, and a made-up one is checkable in thirty seconds.',
-      'Do not pad the call. Nothing found means there is genuinely less to say.',
-      'Do not promise more traffic, more enquiries, or a better ranking. Nothing here measured any of them.',
+      'Keinen Befund erfinden. Das Audit hat keinen gefunden, und ein ausgedachter ist in dreißig Sekunden überprüft.',
+      'Den Anruf nicht strecken. Nichts gefunden heißt, es gibt wirklich weniger zu sagen.',
+      'Keine mehr Besucher, mehr Anfragen oder besseres Ranking versprechen. Nichts davon wurde hier gemessen.',
     ],
   },
 
   tips: [
     {
       trigger: 'happy_as_is',
-      cues: ['not looking', 'we are fine', 'happy with', 'no complaints', 'all good'],
-      body: 'Agree, ask your one question, and get off the phone.',
+      cues: ['suchen nichts', 'sind zufrieden', 'keiner beschwert', 'passt schon', 'läuft gut'],
+      body: 'Zustimmen, die eine Frage stellen und auflegen.',
     },
     {
       trigger: 'no_time',
-      cues: ['be quick', 'no time', 'in the middle of', 'bad moment'],
-      body: 'You have no angle. Thank them and end it — do not spend the goodwill.',
+      cues: ['machen sie schnell', 'keine zeit', 'mitten in', 'ungünstig'],
+      body: 'Kein Aufhänger da. Bedanken und beenden, Wohlwollen nicht verbrauchen.',
     },
     {
       trigger: 'price_question',
-      cues: ['what does it cost', 'how much', 'what would you charge'],
-      body: 'No scope, no number. Ask what they would want doing.',
+      cues: ['was kostet', 'wie teuer', 'was verlangen sie'],
+      body: 'Kein Umfang, keine Zahl. Fragen, was gemacht werden soll.',
     },
     {
       trigger: 'buying_signal',
-      cues: ['we have been meaning', 'we were thinking', 'next step', 'could you', 'what do you do'],
-      body: 'There it is. Stop talking and let them describe it.',
+      cues: ['wollten wir schon', 'haben überlegt', 'nächster schritt', 'könnten sie', 'was machen sie'],
+      body: 'Da ist es. Aufhören zu reden und beschreiben lassen.',
     },
     {
       trigger: 'not_the_decider',
-      cues: ['the owner', 'my boss', 'head office', 'not my decision'],
-      body: 'No pitch to leave. Get the name and ring back.',
+      cues: ['der inhaber', 'mein chef', 'die zentrale', 'nicht meine entscheidung'],
+      body: 'Kein Pitch zum Dalassen. Namen holen und später anrufen.',
     },
     {
       trigger: 'privacy_worry',
-      cues: ['where did you get', 'how do you have', 'my data', 'who gave you'],
-      body: 'Your public Google listing. Say it and move on.',
+      cues: ['woher haben sie', 'wie kommen sie an', 'meine daten', 'wer hat ihnen'],
+      body: 'Ihr öffentlicher Google-Eintrag. Sagen und weiter.',
     },
   ],
 
   summary: {
     body:
-      'Reached {name}. The audit found nothing to open on and the call was run as questions rather than a pitch. ' +
-      'Well reviewed, no evident problem with the site. Nothing agreed; no reason to push.',
+      'Bei {name} durchgekommen. Das Audit hat keinen Aufhänger ergeben, das Gespräch wurde deshalb über Fragen geführt statt über einen Pitch. ' +
+      'Gut bewertet, an der Website nichts Auffälliges. Nichts vereinbart; es gab auch keinen Grund nachzusetzen.',
     suggestedStatus: 'contacted',
     suggestedNextAction: null,
     // Null, and it is the point of this fixture rather than a gap in it. Nothing

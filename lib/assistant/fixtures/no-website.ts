@@ -10,6 +10,13 @@ import type { AssistantFixture } from '@/lib/assistant/fixtures/types'
  * who has run his shop for twenty years without one. What is true is narrower
  * and better — people already look them up, and what they find is a Google
  * listing somebody else controls.
+ *
+ * THE STRINGS ARE GERMAN AND THE COMMENTS ARE NOT. Everything in this file that
+ * the operator reads off a screen mid-call is in the language he is about to say
+ * it in; everything that explains why is in the language the rest of this
+ * codebase is written in. `cues` are German too, and that is a fix rather than a
+ * translation — they are matched against a German transcript, and while they
+ * were English the mock could not fire a single one of them.
  */
 export const NO_WEBSITE: AssistantFixture = {
   key: 'no_website',
@@ -18,119 +25,120 @@ export const NO_WEBSITE: AssistantFixture = {
   requiresWebsite: false,
 
   briefing: {
-    headline: '{name} — a listing, a phone number, and nowhere to send anyone.',
+    headline: '{name} — ein Eintrag, eine Telefonnummer, und nichts dahinter.',
     opening:
-      'Good morning, this is Lead Engine calling — you came up when I was looking at businesses in {city}. ' +
-      'You have a Google listing and nothing behind it; is that on purpose?',
+      'Guten Tag, ich habe mir gerade angeschaut, wie Betriebe in {city} online dastehen, und bin bei Ihnen hängengeblieben. ' +
+      'Sie haben einen Google-Eintrag und nichts dahinter — ist das Absicht?',
     points: [
       {
-        label: 'Reviews, no site',
+        label: 'Bewertungen, keine Seite',
         detail:
-          '{reviews} people took the trouble to review you and there is nothing for the next one to click through to.',
+          '{reviews} Leute haben sich die Mühe gemacht, Sie zu bewerten, und der nächste hat nichts zum Anklicken.',
         code: 'no_website',
       },
       {
-        label: 'Google owns the page',
+        label: 'Die Seite gehört Google',
         detail:
-          'The only page about {name} that exists is one Google put together — you cannot change what it says.',
+          'Die einzige Seite über {name}, die es gibt, hat Google zusammengestellt. Sie können nicht ändern, was da steht.',
         code: 'no_website',
       },
       {
-        label: 'They are already looking',
+        label: 'Die suchen längst',
         detail:
-          'Nobody rings before checking. The search is already happening; the question is only what it turns up.',
+          'Vor dem Anruf schaut jeder nach. Die Suche passiert sowieso — die Frage ist nur, was dabei herauskommt.',
         code: null,
       },
       {
-        label: 'Whoever answers first',
+        label: 'Wer zuerst auftaucht',
         detail:
-          'Half a dozen competitors in {city} are one click deep. Yours is a phone number and an address.',
+          'Ein halbes Dutzend Betriebe in {city} sind einen Klick entfernt. Sie sind eine Nummer und eine Adresse.',
         code: null,
       },
     ],
     objections: [
       {
-        objection: 'We get all our work by word of mouth.',
+        objection: 'Wir kriegen alles über Empfehlung.',
         reply:
-          'That is exactly why it is worth doing — word of mouth ends with someone typing your name in, and that is the moment I am talking about.',
+          'Genau deshalb lohnt es sich — eine Empfehlung endet damit, dass jemand Ihren Namen eintippt. Von dem Moment rede ich.',
         trigger: 'happy_as_is',
       },
       {
-        objection: 'My nephew was going to build one.',
-        reply: 'How long has that been the plan? I am not trying to replace him, I am asking what it is waiting on.',
+        objection: 'Mein Neffe wollte mir eine machen.',
+        reply:
+          'Wie lange ist das schon der Plan? Ich will ihn nicht ersetzen, ich frage nur, woran es hängt.',
         trigger: 'already_have_someone',
       },
       {
-        objection: 'What does something like that cost?',
+        objection: 'Was kostet denn so was?',
         reply:
-          'Less than you are expecting, but I would be guessing until I know what you actually need it to do. Can I ask two questions first?',
+          'Weniger als Sie denken, aber ich würde raten, solange ich nicht weiß, was die Seite können muss. Darf ich zwei Fragen stellen?',
         trigger: 'price_question',
       },
       {
-        objection: 'We are on Facebook.',
+        objection: 'Wir sind bei Facebook.',
         reply:
-          'You are, and it is doing something. It is also a page you do not own, in front of people who did not search for you.',
+          'Sind Sie, und das bringt auch etwas. Es ist nur eine Seite, die Ihnen nicht gehört, vor Leuten, die gar nicht nach Ihnen gesucht haben.',
         trigger: null,
       },
     ],
-    ask: 'Fifteen minutes later this week to go through what the page would need to say — nothing to prepare.',
+    ask: 'Fünfzehn Minuten diese Woche, um durchzugehen, was auf der Seite stehen müsste. Vorbereiten müssen Sie nichts.',
     avoid: [
-      'Do not say they are invisible on Google. They are not — the listing ranks, and that is the whole reason we found them.',
-      'Do not claim lost customers or lost revenue. Nothing here measured that, and the number would be invented.',
-      'Do not promise a ranking. Nothing in the audit says anything about where they would place.',
+      'Nicht sagen, sie seien bei Google unsichtbar. Sind sie nicht — der Eintrag rankt, deshalb haben wir sie überhaupt gefunden.',
+      'Keine verlorenen Kunden und keinen verlorenen Umsatz behaupten. Das hat nichts gemessen, die Zahl wäre erfunden.',
+      'Kein Ranking versprechen. Das Audit sagt nichts darüber, wo sie landen würden.',
     ],
   },
 
   tips: [
     {
       trigger: 'already_have_someone',
-      cues: ['nephew', 'my son', 'my daughter', 'a friend', 'someone is doing', 'we have an agency'],
-      body: 'Ask how long it has been in progress. Do not compete with the nephew.',
+      cues: ['neffe', 'mein sohn', 'meine tochter', 'ein bekannter', 'macht mir jemand', 'haben eine agentur'],
+      body: 'Fragen, wie lange das schon läuft. Nicht gegen den Neffen reden.',
     },
     {
       trigger: 'happy_as_is',
-      cues: ['word of mouth', 'we do not need', "don't need one", 'been fine', 'plenty of work'],
-      body: 'Agree with them. Then: "and when someone hears about you, what do they find?"',
+      cues: ['mundpropaganda', 'über empfehlung', 'brauchen wir nicht', 'brauche ich nicht', 'läuft auch so'],
+      body: 'Zustimmen. Dann: und wenn jemand von Ihnen hört, was findet der?',
     },
     {
       trigger: 'price_question',
-      cues: ['what does it cost', 'how much', 'what would that run', 'expensive'],
-      body: 'No number yet. Ask what it would have to do first.',
+      cues: ['was kostet', 'wie teuer', 'was würde das kosten', 'preislich'],
+      body: 'Noch keine Zahl. Erst fragen, was die Seite können muss.',
     },
     {
       trigger: 'no_time',
-      cues: ['in the middle of', 'customers waiting', 'be quick', 'no time', 'bad moment'],
-      body: 'Take the exit. Ask for a better time and hang up first.',
+      cues: ['keine zeit', 'mitten in', 'machen sie schnell', 'ungünstig', 'auf der baustelle'],
+      body: 'Ausstieg nehmen. Nach besserer Zeit fragen und zuerst auflegen.',
     },
     {
       trigger: 'send_me_an_email',
-      cues: ['send me an email', 'send something over', 'in writing', 'email me'],
-      body: 'Agree — then get a day for the follow-up call before you hang up.',
+      cues: ['schicken sie mir', 'schriftlich', 'per mail', 'unterlagen'],
+      body: 'Zusagen. Vorher einen Tag für den Rückruf festmachen.',
     },
     {
       trigger: 'not_the_decider',
-      cues: ['the owner', 'my husband', 'my wife', 'my partner', 'head office', 'not my decision'],
-      body: 'Get the name and when they are in. Do not pitch further.',
+      cues: ['der chef', 'mein mann', 'meine frau', 'der inhaber', 'die zentrale', 'nicht meine entscheidung'],
+      body: 'Namen holen und wann er da ist. Nicht weiter pitchen.',
     },
     {
       trigger: 'buying_signal',
-      cues: ['how long would', 'what would we need', 'when could you', 'next step', 'what happens then'],
-      body: 'They are in. Stop selling and put a date on it.',
+      cues: ['wie lange würde', 'was bräuchten wir', 'wann könnten sie', 'nächster schritt', 'was passiert dann'],
+      body: 'Er ist drin. Aufhören zu verkaufen und Termin festmachen.',
     },
     {
       trigger: 'privacy_worry',
-      cues: ['where did you get', 'how do you have my', 'my data', 'who gave you'],
-      body: 'Your public Google listing. Say it plainly and move on.',
+      cues: ['woher haben sie', 'wie kommen sie an', 'meine daten', 'wer hat ihnen'],
+      body: 'Ihr öffentlicher Google-Eintrag. Nüchtern sagen und weiter.',
     },
   ],
 
   summary: {
     body:
-      'Reached {name} in {city}. No website; the Google listing is the whole presence, and they know it. ' +
-      'Work comes by word of mouth and they are not unhappy — the opening that landed was what a referral finds when they look you up. ' +
-      'Someone in the family had been going to build a site and it has not moved in months. No price discussed.',
+      'Bei {name} in {city} durchgekommen. Keine Website; der Google-Eintrag ist der ganze Auftritt, und das ist ihnen bewusst. ' +
+      'Die Arbeit kommt über Empfehlung und sie sind damit nicht unzufrieden — gezogen hat der Einstieg, was eine Empfehlung findet, wenn sie nachschaut. ' +
+      'Jemand aus der Familie wollte eine Seite bauen, das liegt seit Monaten. Über Preise wurde nicht gesprochen.',
     suggestedStatus: 'contacted',
-    suggestedNextAction: 'Call back in a week with two examples of one-page sites for a business their size.',
+    suggestedNextAction: 'In einer Woche zurückrufen, mit zwei Beispielen für Einseiter in der Größenordnung.',
     suggestedFollowUpDays: 7,
   },
 }

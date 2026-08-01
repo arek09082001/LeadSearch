@@ -27,6 +27,18 @@ import type {
  *   stop, and the restart is invisible: the call is still going, so the surface
  *   must not blink to `stopped` and back.
  *
+ *   IT DROPS THE SOCKET AFTER A FEW MINUTES, and this is the one that cost a
+ *   call. Recognition does not happen in the browser: Chrome holds a connection
+ *   to Google's service, and that connection does not survive a long call. What
+ *   arrives is `error: 'network'` — somewhere around the five-minute mark, on a
+ *   call that is going fine — and the first version of this file treated it as
+ *   fatal. The session died, the surface said "press Start again", and the
+ *   operator was mid-sentence and not looking at the screen. Everything after
+ *   that point was lost, which on this product means the summary was written
+ *   from the first five minutes of a twenty-minute conversation.
+ *
+ *   So `network` is now RECOVERABLE, not fatal. See `RECOVERABLE` below.
+ *
  *   IT REVISES WHAT IT ALREADY SAID. Results arrive interim and are replaced,
  *   sometimes several times, which is why `TranscriptChunk` carries `final` and
  *   why only final chunks are ever written down.
@@ -124,19 +136,58 @@ const MESSAGES: Record<string, string> = {
   'service-not-allowed':
     'Chrome refused the recognition service. Check that the page is on https or localhost.',
   'audio-capture': 'No microphone was found. Check that one is plugged in and selected in Chrome.',
-  network: 'The recogniser lost its connection to Google. The call is still going; press Start again.',
+  // No entry for `network`. It is recovered from rather than reported — see
+  // `RECOVERABLE` — and the message it used to carry told the operator to press
+  // a button the code now presses for him.
   aborted: 'Recognition was interrupted.',
   'language-not-supported': `This browser cannot recognise ${LANGUAGE}.`,
 }
 
 /**
- * Codes that mean "try again" versus codes that mean "stop and tell him".
+ * Codes the operator never sees. Silence, and our own restarts.
  *
- * `no-speech` fires on any decent pause and `aborted` fires on our own restart,
- * so both are noise. Everything else has ended the session for a reason the
- * operator can act on, and the surface should say so once rather than loop.
+ * `no-speech` fires on any decent pause and `aborted` fires when we cycle the
+ * session ourselves. Neither is a fault and neither counts against the recovery
+ * budget below — a quiet call must not be able to exhaust it.
  */
-const HARMLESS = new Set(['no-speech', 'aborted'])
+const SILENT = new Set(['no-speech', 'aborted'])
+
+/**
+ * Codes that end the session but not the transcript.
+ *
+ * `network` is the whole reason this set exists. Chrome's recogniser is a socket
+ * to Google, that socket does not survive a long call, and the failure arrives
+ * as this code a few minutes in. It is not something the operator can act on and
+ * it is not a reason to stop transcribing — it is a reconnect.
+ *
+ * Everything NOT in either set is genuinely fatal: a refused microphone, no
+ * microphone, an unsupported language. Those need a person to do something, so
+ * the surface says so once rather than looping.
+ */
+const RECOVERABLE = new Set(['network'])
+
+/**
+ * How hard to try before admitting the recogniser is gone.
+ *
+ * The counter is reset by any final result, so this is six failures IN A ROW
+ * WITH NOTHING HEARD BETWEEN THEM — not six over a long call. A reconnect that
+ * works and then transcribes a sentence has cost nothing and is forgotten.
+ */
+const MAX_CONSECUTIVE_RESTARTS = 6
+
+/**
+ * How long to wait before each retry, in milliseconds.
+ *
+ * The first one is a tick rather than zero on purpose: `start()` inside `onend`
+ * throws `InvalidStateError` on Chrome often enough to matter, because the old
+ * session has not finished tearing down in the same task. After that it backs
+ * off — a service that just refused a connection will refuse the next one too,
+ * and hammering it is how a transient outage becomes a dead session.
+ *
+ * The ceiling is four seconds. On a phone call four seconds is a sentence, which
+ * is the most this is willing to lose while it reconnects.
+ */
+const RESTART_DELAYS_MS = [200, 400, 1_000, 2_000, 4_000, 4_000]
 
 /* ------------------------------------------------------------------------- *
  * The provider
@@ -184,6 +235,22 @@ export class BrowserTranscriptProvider implements TranscriptProvider {
     let closing = false
     /** Set when an error ended the session for good. Suppresses the restart too. */
     let failed = false
+    /**
+     * Restarts since the last thing anybody said.
+     *
+     * Reset by a final result, which is the only proof that a session is
+     * actually working. That is what makes the budget mean "it is broken" rather
+     * than "this has been a long call".
+     */
+    let consecutiveRestarts = 0
+    /** The pending restart, so stopping cancels it instead of racing it. */
+    let restartTimer: ReturnType<typeof setTimeout> | null = null
+
+    function giveUp(message: string) {
+      failed = true
+      listener.onError(message)
+      listener.onStatus('error')
+    }
 
     recognition.onstart = () => {
       if (!closing && !failed) listener.onStatus('listening')
@@ -194,6 +261,10 @@ export class BrowserTranscriptProvider implements TranscriptProvider {
         const result = event.results[index]
         const text = result[0]?.transcript?.trim()
         if (!text) continue
+
+        // Words arrived, so whatever went wrong before is over. Anything less
+        // than a final result may be the recogniser thinking out loud.
+        if (result.isFinal) consecutiveRestarts = 0
 
         listener.onChunk({
           atMs: now(),
@@ -206,24 +277,37 @@ export class BrowserTranscriptProvider implements TranscriptProvider {
     }
 
     recognition.onerror = (event) => {
-      if (HARMLESS.has(event.error)) return
+      // Silence, and our own cycling. Never shown, never counted.
+      if (SILENT.has(event.error)) return
 
-      failed = true
-      listener.onError(
-        MESSAGES[event.error] ?? `The recogniser stopped: ${event.message || event.error}.`,
-      )
-      listener.onStatus('error')
+      /*
+       * A dropped connection is a reconnect, not a stop. `onend` follows this
+       * event and does the actual work; all this has to do is not kill the
+       * session on the way past. The operator is told nothing, because there is
+       * nothing for him to do and he is on the phone.
+       */
+      if (RECOVERABLE.has(event.error)) return
+
+      giveUp(MESSAGES[event.error] ?? `The recogniser stopped: ${event.message || event.error}.`)
     }
 
     /*
-     * The restart. Chrome ends the session on silence, and a sales call is
-     * mostly silence from this microphone's point of view — the other person
-     * talking, the operator listening. Without this the transcript stops
-     * somewhere in the first minute and nothing says why.
+     * The restart. Two different things end a session and both land here.
      *
-     * `start()` throws if the session is somehow already running, and that throw
-     * must not escape into an event handler: it would leave the call with a dead
-     * recogniser and a surface still drawing "listening".
+     * Chrome ends it on silence — a sales call is mostly silence from this
+     * microphone's point of view, the other person talking and the operator
+     * listening — and Chrome ends it again a few minutes in when the socket to
+     * the recognition service drops. Neither is a reason to stop transcribing a
+     * call that is still happening.
+     *
+     * Deferred rather than immediate: `start()` throws `InvalidStateError` if
+     * the previous session has not finished tearing down, which in the same task
+     * it has not. That throw used to become a dead recogniser under a surface
+     * still drawing "listening".
+     *
+     * The status is deliberately NOT moved during a restart. The call is still
+     * going, and a readout that blinked to `stopped` and back every time the
+     * other person paused would be a readout the operator learns to ignore.
      */
     recognition.onend = () => {
       if (closing || failed) {
@@ -231,28 +315,51 @@ export class BrowserTranscriptProvider implements TranscriptProvider {
         return
       }
 
-      try {
-        recognition.start()
-      } catch {
-        failed = true
-        listener.onError('The recogniser stopped and would not restart. Press Start again.')
-        listener.onStatus('error')
+      if (consecutiveRestarts >= MAX_CONSECUTIVE_RESTARTS) {
+        giveUp(
+          'The recogniser lost its connection to Google and could not get it back. ' +
+            'The call is still going and everything up to now is saved — press Start again.',
+        )
+        return
       }
+
+      const delay =
+        RESTART_DELAYS_MS[Math.min(consecutiveRestarts, RESTART_DELAYS_MS.length - 1)]
+      consecutiveRestarts += 1
+
+      restartTimer = setTimeout(() => {
+        restartTimer = null
+        if (closing || failed) return
+
+        try {
+          recognition.start()
+        } catch {
+          /*
+           * Not fatal on its own. The session may simply not have let go yet, and
+           * `onend` will fire again — or the budget above will run out and say so
+           * properly. Giving up on the first refused restart is what turned a
+           * hiccup into a lost transcript.
+           */
+          listener.onStatus('listening')
+        }
+      }, delay)
     }
 
     listener.onStatus('starting')
     try {
       recognition.start()
     } catch (error) {
-      failed = true
       const message = error instanceof Error ? error.message : 'Speech recognition would not start.'
-      listener.onError(message)
-      listener.onStatus('error')
+      giveUp(message)
     }
 
     return {
       stop: () => {
         closing = true
+        if (restartTimer !== null) {
+          clearTimeout(restartTimer)
+          restartTimer = null
+        }
         // `stop()` rather than `abort()`: it lets the recogniser deliver the
         // sentence it is holding, which is usually the last thing said before
         // the operator reached for the button.

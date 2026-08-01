@@ -14,6 +14,11 @@ import type { AssistantFixture } from '@/lib/assistant/fixtures/types'
  * So the `avoid` list here is longer than the points list, deliberately. What
  * the audit found is a missing page. What it did not find is a lawyer, a
  * deadline, or a legal opinion about their particular business.
+ *
+ * German strings, English comments; see the note in `no-website.ts`. The
+ * restraint above survives translation and is if anything harder in German,
+ * where the vocabulary of the subject — Abmahnung, Bußgeld, abmahnfähig —
+ * arrives pre-loaded with a threat the audit never measured.
  */
 export const NO_IMPRINT: AssistantFixture = {
   key: 'no_imprint',
@@ -22,119 +27,122 @@ export const NO_IMPRINT: AssistantFixture = {
   requiresWebsite: true,
 
   briefing: {
-    headline: '{name} — the site is live and there is no Impressum on it.',
+    headline: '{name} — die Seite ist online und es steht kein Impressum drauf.',
     opening:
-      'Good morning — quick and slightly unusual reason for calling. ' +
-      'I was on your website and could not find an Impressum anywhere. Is it hidden somewhere I missed?',
+      'Guten Morgen — kurzer und etwas ungewöhnlicher Grund für meinen Anruf. ' +
+      'Ich war auf Ihrer Website und habe nirgends ein Impressum gefunden. Steckt es irgendwo, wo ich es übersehen habe?',
     points: [
       {
-        label: 'No Impressum',
+        label: 'Kein Impressum',
         detail:
-          'Nothing on any page, and nothing linked from the footer. Business sites in Germany are expected to carry one.',
+          'Auf keiner Seite, und auch unten nichts verlinkt. Bei geschäftlichen Websites in Deutschland gehört eins dazu.',
         code: 'no_imprint',
       },
       {
-        label: 'No privacy page',
-        detail: 'No Datenschutzerklärung either — the two are usually missing together and fixed together.',
+        label: 'Keine Datenschutzseite',
+        detail:
+          'Eine Datenschutzerklärung fehlt auch — die beiden fehlen meistens zusammen und werden zusammen erledigt.',
         code: 'no_privacy_policy',
       },
       {
-        label: 'Half an hour of work',
+        label: 'Eine halbe Stunde Arbeit',
         detail:
-          'This is not a rebuild. It is two pages and a footer link, and it is the cheapest thing on the site to put right.',
+          'Das ist kein Neubau. Das sind zwei Seiten und ein Link unten drunter, und es ist das Billigste an der ganzen Website.',
         code: null,
       },
       {
-        label: 'A reason to look at the rest',
+        label: 'Ein Anlass für den Rest',
         detail:
-          'It is a small job that gets someone under the bonnet. Whatever else is wrong turns up while it is being done.',
+          'Eine kleine Sache, bei der jemand unter die Haube schaut. Was sonst noch nicht stimmt, fällt dabei auf.',
         code: null,
       },
     ],
     objections: [
       {
-        objection: 'Is that actually required?',
+        objection: 'Muss das denn überhaupt sein?',
         reply:
-          'For a business site, yes, that is the general rule — but I am not your lawyer. What I can tell you is that yours has neither page.',
+          'Bei einer geschäftlichen Seite ist das die Regel, ja — ich bin aber nicht Ihr Anwalt. Was ich Ihnen sagen kann: bei Ihnen fehlen beide Seiten.',
         trigger: null,
       },
       {
-        objection: 'Am I going to get fined?',
+        objection: 'Krieg ich jetzt ein Bußgeld?',
         reply:
-          'I have no idea, and anybody who tells you they do is selling you something. I am telling you the page is missing.',
+          'Keine Ahnung, und wer Ihnen sagt, er wüsste es, will Ihnen etwas verkaufen. Ich sage Ihnen, dass die Seite fehlt.',
         trigger: null,
       },
       {
-        objection: 'Our agency built it, that is on them.',
-        reply: 'Probably — it is still your site with your name on it. Worth one email to them today.',
+        objection: 'Das hat unsere Agentur gebaut, das ist deren Sache.',
+        reply:
+          'Wahrscheinlich — es ist trotzdem Ihre Seite mit Ihrem Namen drauf. Eine Mail an die heute ist es wert.',
         trigger: 'already_have_someone',
       },
       {
-        objection: 'Send me an email about it.',
+        objection: 'Schicken Sie mir das mal per Mail.',
         reply:
-          'Happy to. I will put the two missing pages in writing so you can forward it to whoever maintains the site.',
+          'Mache ich gerne. Ich schreibe Ihnen die beiden fehlenden Seiten auf, dann können Sie das weiterleiten an den, der die Website betreut.',
         trigger: 'send_me_an_email',
       },
     ],
-    ask: 'Say yes to the written summary, and take five minutes on Thursday to go through what else the check turned up.',
+    ask: 'Sagen Sie Ja zu der schriftlichen Zusammenfassung, und nehmen Sie sich am Donnerstag fünf Minuten für das, was die Prüfung sonst noch ergeben hat.',
     avoid: [
-      'Do not say they are breaking the law. The audit found a missing page; it did not read their business.',
-      'Do not mention Abmahnungen, fines, or amounts. Nothing here supports a number and the call becomes a threat.',
-      'Do not offer a legal opinion, including a reassuring one. Not the job, and it is the one claim they might act on.',
-      'Do not say it is a five-minute fix if they ask you to do it now. Five minutes of work still needs their details.',
+      'Nicht sagen, sie verstoßen gegen das Gesetz. Das Audit hat eine fehlende Seite gefunden, es hat nicht ihren Betrieb geprüft.',
+      'Keine Abmahnungen, keine Bußgelder, keine Beträge. Nichts hier trägt eine Zahl, und der Anruf wird damit zur Drohung.',
+      'Keine rechtliche Einschätzung abgeben, auch keine beruhigende. Nicht die Aufgabe, und es ist die eine Aussage, auf die sie handeln könnten.',
+      'Nicht sagen, das sei in fünf Minuten erledigt, wenn sie es sofort wollen. Fünf Minuten Arbeit brauchen trotzdem ihre Daten.',
     ],
   },
 
   tips: [
     {
       trigger: 'privacy_worry',
-      cues: ['where did you get', 'how do you have', 'my data', 'who gave you', 'dsgvo', 'gdpr'],
-      body: 'Public Google listing, and your own website. Answer it straight — you are the one calling about compliance.',
+      cues: ['woher haben sie', 'wie kommen sie an', 'meine daten', 'wer hat ihnen', 'dsgvo', 'datenschutz'],
+      body: 'Google-Eintrag und ihre Website. Gerade hier sauber beantworten.',
     },
     {
       trigger: 'already_have_someone',
-      cues: ['the agency', 'our web guy', 'someone built', 'a company does', 'my nephew'],
-      body: 'It is still their site. Ask for the maintainer’s email — send it there too.',
+      cues: ['die agentur', 'unser webmensch', 'hat jemand gebaut', 'eine firma', 'mein neffe'],
+      body: 'Bleibt ihre Seite. Mailadresse vom Betreuer holen, dahin mitschicken.',
     },
     {
       trigger: 'no_time',
-      cues: ['be quick', 'no time', 'in the middle of', 'bad moment', 'customers here'],
-      body: 'One sentence: no Impressum on the site. Then ask for an email address.',
+      cues: ['machen sie schnell', 'keine zeit', 'mitten in', 'ungünstig', 'hab kunden'],
+      body: 'Ein Satz: kein Impressum auf der Seite. Dann E-Mail-Adresse holen.',
     },
     {
       trigger: 'send_me_an_email',
-      cues: ['send me an email', 'in writing', 'email me', 'send something over'],
-      body: 'Yes — and get a day for the follow-up before you hang up.',
+      cues: ['schicken sie mir', 'schriftlich', 'per mail', 'schicken sie was'],
+      body: 'Ja — und vor dem Auflegen einen Tag für den Rückruf holen.',
     },
     {
       trigger: 'price_question',
-      cues: ['what does it cost', 'how much', 'what would you charge'],
-      body: 'Small job, and say so. Do not build a package on the phone.',
+      cues: ['was kostet', 'wie teuer', 'was verlangen sie'],
+      body: 'Kleine Sache, und das auch sagen. Kein Paket am Telefon bauen.',
     },
     {
       trigger: 'not_the_decider',
-      cues: ['the owner', 'my boss', 'head office', 'not my decision', 'my husband', 'my wife'],
-      body: 'Leave the fact, not the pitch. Ask when the owner is in.',
+      cues: ['der inhaber', 'mein chef', 'die zentrale', 'nicht meine entscheidung', 'mein mann', 'meine frau'],
+      body: 'Den Befund dalassen, nicht den Pitch. Fragen, wann der Chef da ist.',
     },
     {
       trigger: 'buying_signal',
-      cues: ['can you fix', 'how quickly', 'what do you need from us', 'next step', 'send it over'],
-      body: 'They want it gone. Ask what else is on the site while you are in there.',
+      cues: ['können sie das machen', 'wie schnell', 'was brauchen sie von uns', 'nächster schritt'],
+      body: 'Er will es weghaben. Fragen, was sonst noch auf der Seite ist.',
     },
     {
       trigger: 'happy_as_is',
-      cues: ['nobody has complained', 'never been a problem', 'we are fine', 'years like that'],
-      body: 'Do not argue and do not escalate. State the fact once and offer the email.',
+      cues: ['keiner beschwert', 'nie ein problem', 'sind zufrieden', 'seit jahren so'],
+      body: 'Nicht streiten und nicht aufblasen. Befund einmal nennen, Mail anbieten.',
     },
   ],
 
   summary: {
     body:
-      'Reached {name}. No Impressum and no privacy page on the site; they had not realised. ' +
-      'No legal claim was made on the call — the fact was stated once and they asked for it in writing. ' +
-      'The site is maintained by an outside contact, so the summary goes to both.',
+      'Bei {name} durchgekommen. Kein Impressum und keine Datenschutzseite auf der Website; das war ihnen nicht bewusst. ' +
+      'Im Gespräch wurde keine rechtliche Aussage getroffen — der Befund wurde einmal genannt, und sie haben darum gebeten, das schriftlich zu bekommen. ' +
+      'Die Website betreut jemand von außen, die Zusammenfassung geht deshalb an beide.',
     suggestedStatus: 'contacted',
-    suggestedNextAction: 'Email the two missing pages in writing, copy the maintainer, call back Thursday.',
+    suggestedNextAction:
+      'Die zwei fehlenden Seiten schriftlich mailen, den Betreuer in Kopie, Donnerstag zurückrufen.',
     // Three days. "Thursday" is the sentence he will say; the offset is what a
     // date field can be filled from, and the two have to mean the same thing.
     suggestedFollowUpDays: 3,

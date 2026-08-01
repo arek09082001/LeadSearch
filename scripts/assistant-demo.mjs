@@ -66,7 +66,7 @@ const CASES = [
         notes: [],
       },
     },
-    said: 'Ehrlich gesagt kommt bei uns alles über word of mouth, wir brauchen so etwas nicht.',
+    said: 'Ehrlich gesagt kommt bei uns alles über Mundpropaganda, wir brauchen so etwas nicht.',
   },
   {
     what: 'A website nobody has touched in years',
@@ -106,7 +106,7 @@ const CASES = [
         notes: [],
       },
     },
-    said: 'Das läuft doch, es hat sich noch nie jemand beschwert — works fine für uns.',
+    said: 'Das läuft doch, es hat sich noch nie jemand beschwert.',
   },
   {
     what: 'A site with no Impressum',
@@ -149,7 +149,7 @@ const CASES = [
         notes: ['Reception said the owner is in on Thursdays.'],
       },
     },
-    said: 'Und wo haben Sie meine Nummer her? Was ist mit my data?',
+    said: 'Und woher haben Sie meine Nummer? Was ist mit meinen Daten?',
   },
 ]
 

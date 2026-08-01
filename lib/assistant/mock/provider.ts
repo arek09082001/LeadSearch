@@ -1,5 +1,6 @@
 import { CONSENT_TIP, LONG_CALL_TIP } from '@/lib/assistant/fixtures/ambient'
 import { FALLBACK_FIXTURE, eligibleFixtures, selectFixture } from '@/lib/assistant/fixtures'
+import { normalise } from '@/lib/assistant/triggers'
 import { CONSENT_GRACE_MS, LONG_CALL_MS } from '@/lib/assistant/vocabulary'
 import type { AssistantFixture, FixtureTip } from '@/lib/assistant/fixtures/types'
 import type {
@@ -172,8 +173,11 @@ function fill(template: string, values: Values): string | null {
  * situation, and it makes no claim that can be contradicted.
  */
 const STAND_INS: Values = {
-  name: 'this business',
-  city: 'your area',
+  // German, because these land inside a sentence he says out loud. "in Ihrer
+  // Gegend" is what a person says when they do not know the town, which is
+  // exactly the situation, and it makes no claim that can be contradicted.
+  name: 'dieser Betrieb',
+  city: 'Ihrer Gegend',
   rating: null,
   reviews: null,
 }
@@ -333,11 +337,17 @@ export class MockTipProvider implements TipProvider {
     const pool = tipPool(context)
 
     for (const segment of recentlyHeard(context.transcript, context.atMs)) {
-      const heard = segment.text.toLowerCase()
+      /*
+       * Folded on both sides, the way `matchTriggers` does it. A raw
+       * `toLowerCase()` here meant a cue written "über Empfehlung" could never
+       * match a recogniser that wrote "ueber empfehlung", and neither could
+       * match one that wrote "uber" — which is most of them.
+       */
+      const heard = normalise(segment.text)
 
       for (const tip of pool) {
         if (shown.has(tip.trigger)) continue
-        if (!tip.cues.some((cue) => heard.includes(cue))) continue
+        if (!tip.cues.some((cue) => heard.includes(normalise(cue)))) continue
 
         const emitted = emit(tip)
         if (emitted) return emitted
@@ -380,9 +390,10 @@ function fixtureFromTranscript(
   transcript: readonly TranscriptSegment[],
   lead: AssistantLead,
 ): AssistantFixture {
+  // Folded, for the reason `suggest` folds: two spellings of the same matcher.
   const heard = transcript
     .filter((segment) => segment.speaker !== 'operator')
-    .map((segment) => segment.text.toLowerCase())
+    .map((segment) => normalise(segment.text))
     .join(' \n ')
 
   let best: AssistantFixture | null = null
@@ -392,7 +403,7 @@ function fixtureFromTranscript(
     let hits = 0
     for (const tip of fixture.tips) {
       for (const cue of tip.cues) {
-        if (heard.includes(cue)) hits += 1
+        if (heard.includes(normalise(cue))) hits += 1
       }
     }
     if (hits > bestHits) {
