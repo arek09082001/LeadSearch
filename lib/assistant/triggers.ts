@@ -137,8 +137,14 @@ const FILLERS = new Set([
  * cosmetic: a recogniser that returns "auftraege" or "Auftrage" for "Aufträge"
  * is a normal Tuesday, and a rule that only matched the correctly-accented form
  * would fail silently and look like a missing rule rather than a spelling one.
+ *
+ * EXPORTED FOR THE MOCK, which has the identical problem and used to solve it by
+ * not solving it: it matched fixture cues against a raw `toLowerCase()`, so a
+ * cue containing an umlaut could never fire on a transcript containing the
+ * folded form, or the other way round. Two spellings of the same matcher is one
+ * more than this product can keep in agreement.
  */
-function normalise(text: string): string {
+export function normalise(text: string): string {
   return text
     .toLowerCase()
     .replace(/ß/g, 'ss')

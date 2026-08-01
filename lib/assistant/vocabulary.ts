@@ -77,54 +77,69 @@ export interface TipSpec {
   standing: string
 }
 
+/*
+ * THE OPERATOR-FACING STRINGS ARE GERMAN AND THE REST OF THIS FILE IS NOT.
+ *
+ * `label` and `standing` are read off a screen during a German phone call, so
+ * they are German. `when` is not: it is the sentence a human argues the list
+ * with, and it is also what the model-backed provider is shown so it can file an
+ * objection under the right situation — both of those are this codebase talking
+ * to itself, and this codebase talks English.
+ *
+ * THE REGISTER OF A STANDING LINE IS THE TOOL TALKING TO HIM, not him talking to
+ * the business. So infinitive or bare imperative, no Sie, no politeness — the
+ * shortest form that survives being read mid-sentence. A card that said "Fragen
+ * Sie den Kunden bitte, wann..." would be four words of courtesy the operator
+ * has to skip past while somebody is waiting for him to answer.
+ */
 export const TIP_SPECS: Record<TipTrigger, TipSpec> = {
   no_time: {
-    label: 'No time',
+    label: 'Keine Zeit',
     when: 'They say they are busy, in the middle of something, or ask you to be quick.',
     weight: 35,
-    standing: 'Offer the written report instead. Get an email address.',
+    standing: 'Bericht schriftlich anbieten. E-Mail-Adresse holen.',
   },
   already_have_someone: {
-    label: 'Has someone',
+    label: 'Hat jemanden',
     when: 'A nephew, an agency or an employee is named as the one who does the website.',
     weight: 45,
-    standing: 'Ask when they last heard from them.',
+    standing: 'Fragen, wann sie zuletzt was von dem gehört haben.',
   },
   happy_as_is: {
-    label: 'Happy as is',
+    label: 'Läuft doch',
     when: 'They say the site is fine, or that customers find them anyway.',
     weight: 40,
-    standing: 'Ask them to open it on their phone.',
+    standing: 'Bitten, die Seite jetzt am Handy aufzumachen.',
   },
   price_question: {
-    label: 'Price',
+    label: 'Preis',
     when: 'They ask what it costs, before any scope has been agreed.',
     weight: 60,
-    standing: 'Do not quote. Ask what they have in mind.',
+    standing: 'Nicht beziffern. Fragen, was er sich vorgestellt hat.',
   },
   not_the_decider: {
-    label: 'Not the decider',
+    label: 'Nicht der Chef',
     when: 'The person on the phone defers to an owner, a partner or a head office.',
     weight: 80,
-    standing: 'Get a name and when they are in.',
+    standing: 'Namen holen und wann derjenige zu erreichen ist.',
   },
   send_me_an_email: {
-    label: 'Send email',
+    label: 'Schriftlich',
     when: 'They ask for it in writing — which ends the call unless something is agreed first.',
     weight: 65,
-    standing: 'Agree a day to speak before you send it.',
+    standing: 'Erst einen Termin ausmachen, dann schicken.',
   },
   privacy_worry: {
-    label: 'Privacy',
+    label: 'Datenschutz',
     when: 'They ask where you got the number, or how their data is being used.',
     weight: 70,
-    standing: 'Public Google listing and their own website. Say it plainly.',
+    standing: 'Öffentlicher Google-Eintrag und die eigene Website. Nüchtern sagen.',
   },
   buying_signal: {
-    label: 'Buying signal',
+    label: 'Kaufsignal',
     when: 'They ask about timing, next steps, or what it would involve. Stop selling.',
     weight: 90,
-    standing: 'They are in. Stop selling and book the time.',
+    standing: 'Er ist drin. Aufhören zu verkaufen, Termin machen.',
   },
   /*
    * The one where the whole pitch is wrong rather than badly timed.
@@ -136,10 +151,10 @@ export const TIP_SPECS: Record<TipTrigger, TipSpec> = {
    * one asks them to look at their phone, the other changes what is being sold.
    */
   fully_booked: {
-    label: 'Fully booked',
+    label: 'Ausgebucht',
     when: 'They say they have enough work, are booked out, or are turning jobs away.',
     weight: 50,
-    standing: 'Ask if they are short of staff, not customers.',
+    standing: 'Fragen, ob Leute fehlen statt Kunden.',
   },
   /*
    * The imprint finding, coming back the other way.
@@ -151,22 +166,22 @@ export const TIP_SPECS: Record<TipTrigger, TipSpec> = {
    * moment the operator is least able to check it.
    */
   legal_worry: {
-    label: 'Legal',
+    label: 'Rechtliches',
     when: 'They raise the imprint, a warning letter or a lawyer.',
     weight: 75,
-    standing: 'State the finding. No warnings, no legal advice.',
+    standing: 'Nur den Befund nennen. Keine Warnung, keine Rechtsberatung.',
   },
   consent_not_noted: {
-    label: 'Consent',
+    label: 'Einwilligung',
     when: 'The call is being transcribed and consent has not been marked yet.',
     weight: 100,
-    standing: 'Say the call is being transcribed. Then tick the box.',
+    standing: 'Sagen, dass mitgeschrieben wird. Dann Haken setzen.',
   },
   call_running_long: {
-    label: 'Running long',
+    label: 'Läuft lang',
     when: 'The call has passed the length at which nothing new gets agreed.',
     weight: 10,
-    standing: 'Agree the next step and get off the phone.',
+    standing: 'Nächsten Schritt festmachen und auflegen.',
   },
 }
 

@@ -29,7 +29,7 @@ import type { FixtureTip } from '@/lib/assistant/fixtures/types'
 export const CONSENT_TIP: FixtureTip = {
   trigger: 'consent_not_noted',
   cues: [],
-  body: 'Consent not marked. Say it is being transcribed, then tap the button.',
+  body: 'Einwilligung fehlt. Sagen, dass mitgeschrieben wird, dann Haken setzen.',
 }
 
 /**
@@ -42,5 +42,5 @@ export const CONSENT_TIP: FixtureTip = {
 export const LONG_CALL_TIP: FixtureTip = {
   trigger: 'call_running_long',
   cues: [],
-  body: 'Twelve minutes. Agree the next step or end it.',
+  body: 'Zwölf Minuten. Nächsten Schritt festmachen oder Schluss machen.',
 }
