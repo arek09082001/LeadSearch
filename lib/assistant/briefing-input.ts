@@ -44,6 +44,22 @@ import type { LeadAudit, LeadRow, TimelineEntry } from '@/lib/leads/types'
 const MAX_NOTES = 5
 const MAX_NOTE_LENGTH = 400
 
+/**
+ * How much of the last call's summary is carried into the next briefing.
+ *
+ * Longer than a note, and deliberately. A note is a line the operator typed and
+ * five of them go in; this is one paragraph, it is the only surviving record of
+ * an entire conversation once the transcript has expired, and it is the single
+ * most useful thing a provider could be told about a lead that has been rung
+ * before. Cutting it to a note's length would leave the opening sentence and
+ * drop whatever was agreed at the end.
+ *
+ * Still bounded, because the bound is the point of doing this here: `types.ts`
+ * says the caller truncates, and once a model is behind the boundary every
+ * character is paid for on every call.
+ */
+const MAX_SUMMARY_LENGTH = 1_200
+
 /** The outreach kinds that mean somebody was actually approached. */
 const CONTACT_TYPES = new Set(['call', 'email', 'message', 'visit', 'meeting'])
 
@@ -65,7 +81,15 @@ export interface BriefingSource {
   score: StoredScore | null
   timeline: TimelineEntry[]
   /** Finished call attempts before this one, newest first. */
-  previousCalls: { endedAt: string | null; outcome: string | null }[]
+  previousCalls: { id: string; endedAt: string | null; outcome: string | null }[]
+  /**
+   * The newest summary across those calls, or null when none was written.
+   *
+   * Passed in already selected rather than derived from `previousCalls`, because
+   * a summary lives in its own table and this module does no I/O — the same
+   * split every other input here is assembled under.
+   */
+  lastSummary: string | null
   reviews: { items: BriefingReview[] } | null
 }
 
@@ -173,6 +197,7 @@ function historyOf(
   lead: LeadRow,
   timeline: TimelineEntry[],
   previousCalls: BriefingSource['previousCalls'],
+  lastSummary: string | null,
 ): BriefingInput['history'] {
   const own = timeline.filter((entry) => entry.kind !== 'refresh')
 
@@ -195,6 +220,9 @@ function historyOf(
     lastContactedAt,
     previousCalls: previousCalls.length,
     lastOutcome: previousCalls.find((call) => call.outcome !== null)?.outcome ?? null,
+    // Truncated here rather than at the query, so the bound sits beside the one
+    // on notes and the two can be argued about together.
+    lastSummary: lastSummary === null ? null : lastSummary.slice(0, MAX_SUMMARY_LENGTH),
     notes: own
       .filter((entry) => entry.kind === 'note' && entry.body)
       .slice(0, MAX_NOTES)
@@ -238,7 +266,7 @@ export function leadOf(lead: LeadRow): AssistantLead {
  * ------------------------------------------------------------------------- */
 
 export function buildBriefingInput(source: BriefingSource): BriefingInput {
-  const { lead, audit, score, timeline, previousCalls, reviews } = source
+  const { lead, audit, score, timeline, previousCalls, lastSummary, reviews } = source
 
   const contributions = new Map(
     (score?.breakdown?.factors ?? []).map((factor) => [factor.code, factor.contribution]),
@@ -248,7 +276,7 @@ export function buildBriefingInput(source: BriefingSource): BriefingInput {
     lead: leadOf(lead),
     findings: findingsOf(audit, contributions),
     measurements: measurementsOf(audit),
-    history: historyOf(lead, timeline, previousCalls),
+    history: historyOf(lead, timeline, previousCalls, lastSummary),
     reviews: reviews?.items ?? null,
   }
 }

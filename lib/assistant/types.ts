@@ -162,6 +162,31 @@ export interface BriefingHistory {
   previousCalls: number
   /** How the last call was filed, from `calls.outcome`. Free text; see the vocabulary. */
   lastOutcome: string | null
+  /**
+   * What was said on the last call that produced a summary, in prose.
+   *
+   * READ WHETHER OR NOT THE OPERATOR TOOK IT, and that is the decision worth
+   * arguing with. `call_summaries.accepted` records whether he agreed with the
+   * suggestions; it does not record whether the conversation happened. A summary
+   * he read and rejected still describes a call that a stranger on the other end
+   * remembers, and opening the next one as though it never occurred is the exact
+   * failure `previousCalls` exists to prevent.
+   *
+   * It does not conflict with the rule that nothing is written without a press.
+   * That rule governs what reaches the operator's own book — `leads.status`, a
+   * note, a follow-up date. This is the assistant's own row being handed back to
+   * the assistant, and no press is owed for that.
+   *
+   * WHICH MAKES IT PARTLY REDUNDANT WITH `notes`, on purpose. A summary he
+   * adopted is in both, because he chose to keep it as his own account and that
+   * choice is worth something a provider can see. `notes` is what he decided was
+   * worth writing down; this is what happened.
+   *
+   * Truncated by the caller, like `notes`, and for the same reason — see
+   * `MAX_SUMMARY_LENGTH`. Null on a lead never rung, and on one rung only on
+   * calls that produced no summary.
+   */
+  lastSummary: string | null
   notes: string[]
 }
 

@@ -58,7 +58,13 @@ const CASES = [
         platform: null,
         platformVersion: null,
       },
-      history: { lastContactedAt: null, previousCalls: 0, lastOutcome: null, notes: [] },
+      history: {
+        lastContactedAt: null,
+        previousCalls: 0,
+        lastOutcome: null,
+        lastSummary: null,
+        notes: [],
+      },
     },
     said: 'Ehrlich gesagt kommt bei uns alles über word of mouth, wir brauchen so etwas nicht.',
   },
@@ -92,7 +98,13 @@ const CASES = [
         platform: 'WordPress',
         platformVersion: '4.9',
       },
-      history: { lastContactedAt: null, previousCalls: 0, lastOutcome: null, notes: [] },
+      history: {
+        lastContactedAt: null,
+        previousCalls: 0,
+        lastOutcome: null,
+        lastSummary: null,
+        notes: [],
+      },
     },
     said: 'Das läuft doch, es hat sich noch nie jemand beschwert — works fine für uns.',
   },
@@ -128,6 +140,12 @@ const CASES = [
         lastContactedAt: '2026-06-02T08:30:00.000Z',
         previousCalls: 1,
         lastOutcome: 'gatekeeper',
+        // What the assistant wrote up after that call, carried in whether or
+        // not the operator took it — see `BriefingHistory.lastSummary`. The
+        // mock ignores it, which is the thing the run below makes visible.
+        lastSummary:
+          'Rang once and did not get past reception. The owner is in on Thursdays; nothing ' +
+          'about the site was discussed and nothing was agreed.',
         notes: ['Reception said the owner is in on Thursdays.'],
       },
     },
@@ -173,6 +191,19 @@ function printBriefing(briefing, ms) {
 
 for (const testCase of CASES) {
   console.log(rule(testCase.what.toUpperCase()))
+
+  /*
+   * What the provider was told about earlier calls, printed before what it did
+   * with it — because with the mock the answer is "nothing". `generate()` reads
+   * findings, lead and measurements and never touches `history`, by the rule in
+   * fixtures/types.ts that a fixture may not branch on its input. Printing the
+   * two next to each other is how that stays a stated property rather than a
+   * surprise: the briefing below is identical whether this block is empty or
+   * full, and it is Phase 17 that changes that.
+   */
+  const { previousCalls, lastOutcome, lastSummary } = testCase.input.history
+  console.log(`\n  GIVEN    ${previousCalls} earlier call(s), last filed as ${lastOutcome ?? '—'}`)
+  console.log(`  LAST     ${lastSummary ?? '(no summary from an earlier call)'}`)
 
   const started = Date.now()
   const briefing = await MOCK_ASSISTANT.briefing.generate(testCase.input)
