@@ -179,6 +179,71 @@
   animation: tick-in 900ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/*
+  Printing.
+
+  Exactly one thing in this product is ever printed: the call briefing, carried
+  to a desk with a phone on it. So the print stylesheet does not try to make the
+  dealing screen work on paper — there is no dealing screen on paper. It prints
+  the briefing alone, on white.
+
+  Two mechanisms, both deliberately blunt:
+
+  1. `visibility` rather than `display` to hide the rest of the page. Setting
+     `display: none` on ancestors would take the briefing down with them, and
+     hiding every sibling by hand is a rule that breaks the next time the page
+     grows a band. Everything is hidden, the print region and its children are
+     shown again, and the region is lifted to the top-left of the sheet.
+
+  2. The theme's own custom properties are re-declared on the region. Tailwind
+     emits `.text-ink` as `color: var(--color-ink)`, so overriding the variables
+     inside the region re-colours every utility inside it at once, with no
+     `print:` variant on a single element and no second set of classes to keep
+     in step. Amber goes to black rather than to a lighter grey: on paper the
+     accent has no field to sit on and no work left to do, and the ordering it
+     encoded is already carried by the numbers beside the hooks.
+*/
+@media print {
+  html,
+  body {
+    background: #fff;
+    color-scheme: light;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  [data-print-region],
+  [data-print-region] * {
+    visibility: visible;
+  }
+
+  [data-print-region] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    border: 0;
+
+    --color-ground: #fff;
+    --color-panel: #fff;
+    --color-raise: #fff;
+    --color-rule: #d4d4d4;
+    --color-rule-strong: #a3a3a3;
+    --color-ink: #000;
+    --color-ink-dim: #262626;
+    --color-ink-faint: #525252;
+    --color-ink-ghost: #737373;
+    /* The accent stops meaning anything on paper. */
+    --color-signal: #000;
+  }
+
+  @page {
+    margin: 14mm;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

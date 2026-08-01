@@ -169,12 +169,45 @@ export interface BriefingHistory {
  * 1. The briefing — before the phone rings
  * ------------------------------------------------------------------------- */
 
+/**
+ * One review, with the person who wrote it deliberately absent.
+ *
+ * Google returns an author's display name, photo and profile link with every
+ * review; none of it is fetched into a row and none of it reaches here. The
+ * operator needs to know that three reviews mention the parking, not who
+ * mentioned it — and once a real provider is behind this boundary, a customer's
+ * name would be a stranger's data going into somebody else's model.
+ */
+export interface BriefingReview {
+  rating: number | null
+  /** The review as written, never Google's translation of it. */
+  body: string | null
+  /** Google's own phrasing of the age — "a month ago". What a person would say. */
+  relativeAge: string | null
+  publishedAt: string | null
+}
+
 export interface BriefingInput {
   lead: AssistantLead
   /** Failed findings, worst first. Empty is legitimate and means: sell on something else. */
   findings: BriefingFinding[]
   measurements: BriefingMeasurements
   history: BriefingHistory
+  /**
+   * What their customers said, when it was worth a request to find out.
+   *
+   * NULL AND EMPTY ARE DIFFERENT and the distinction is the whole reason this is
+   * nullable. Empty means Google was asked and this business has no reviews —
+   * which is a thing to say on a call. Null means nobody asked: the ceiling
+   * refused, Google did not answer, or the cache had expired and the operator is
+   * looking at a briefing prepared without them. A provider must not confuse a
+   * business with no reputation for one whose reputation we did not buy.
+   *
+   * Reviews are fetched on their own Places request, once, at prepare time —
+   * see `lib/providers/google-places/reviews.ts` for why they are not part of
+   * the details mask every save and refresh already pays for.
+   */
+  reviews: readonly BriefingReview[] | null
 }
 
 /** One fact worth saying, with the finding it came from. */
@@ -234,6 +267,33 @@ export interface Briefing {
 
 export interface BriefingProvider {
   generate(input: BriefingInput, ctx?: AssistantContext): Promise<Briefing>
+}
+
+/**
+ * A briefing as a surface reads it back, with the two ages it depends on.
+ *
+ * Not part of the provider contract — a provider returns a `Briefing` and knows
+ * nothing about rows — but it lives here rather than in the server-only store
+ * because the lead page is what renders it, and a client component must be able
+ * to name the shape without importing a module that opens a database.
+ *
+ * `stale` is a comparison between two stored timestamps, never a judgement about
+ * the present: the lead has been audited since this was written, so the faults
+ * it opens with may no longer be the faults. The same failure the diagnosis page
+ * already guards against, one level up and with a phone in the operator's hand.
+ */
+export interface StoredBriefing {
+  id: string
+  callId: string
+  generatedAt: string
+  provider: string
+  model: string | null
+  briefing: Briefing
+  /** When the audit it was written from ran. Null when the lead had none. */
+  diagnosisAsOf: string | null
+  /** How many reviews it was written with. Null when it was written without them. */
+  reviewCount: number | null
+  stale: boolean
 }
 
 /* ------------------------------------------------------------------------- *

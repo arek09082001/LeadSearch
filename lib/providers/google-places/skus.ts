@@ -101,6 +101,17 @@ const ENTERPRISE = new Set([
   'websiteUri',
 ])
 
+/*
+ * The top band. Deliberately NOT exhaustive, and that is safe: the lookup below
+ * already answers `enterprise_atmosphere` for anything it does not recognise,
+ * so this set changes no price. It exists so that the one field in it is priced
+ * by a decision somebody wrote down rather than by a default nobody chose —
+ * `reviews` is the field the call briefing is built on, and a reader working out
+ * why one lead costs $0.025 to prepare should find the answer here rather than
+ * infer it from the absence of an entry in the three tables above.
+ */
+const ENTERPRISE_ATMOSPHERE = new Set(['reviews'])
+
 /**
  * Which tier a single field lands in.
  *
@@ -117,6 +128,7 @@ export function tierForField(field: string): Tier {
   if (IDS_ONLY.has(root)) return 'ids_only'
   if (PRO.has(root)) return 'pro'
   if (ENTERPRISE.has(root)) return 'enterprise'
+  if (ENTERPRISE_ATMOSPHERE.has(root)) return 'enterprise_atmosphere'
   return 'enterprise_atmosphere'
 }
 
@@ -267,5 +279,25 @@ export const DETAILS_FIELD_MASK = [
   'internationalPhoneNumber',
 ] as const
 
+/**
+ * Reviews, and nothing else. Asked once per call, never per lead.
+ *
+ * The whole reason this mask exists separately: `reviews` is the only field this
+ * codebase asks for that lands in Enterprise + Atmosphere, and `tierForFields`
+ * prices a request at its most expensive field. Adding it to
+ * `DETAILS_FIELD_MASK` would lift EVERY Place Details call — the enrichment at
+ * save time, and the nightly refresh across the whole book — from $20/1000 to
+ * $25/1000 and, far worse, would spend the shared 1,000-call monthly allowance
+ * on leads nobody will ever ring.
+ *
+ * Kept this way the arithmetic is the operator's own: a refresh costs what it
+ * costs, and reviews cost one request each time he decides to phone somebody.
+ *
+ * `id` rides along at ids_only so a response can be matched to what was asked
+ * for; it changes neither the tier nor the price.
+ */
+export const REVIEWS_FIELD_MASK = ['id', 'reviews'] as const
+
 export const SEARCH_TIER = tierForFields(SEARCH_FIELD_MASK)
 export const DETAILS_TIER = tierForFields(DETAILS_FIELD_MASK)
+export const REVIEWS_TIER = tierForFields(REVIEWS_FIELD_MASK)

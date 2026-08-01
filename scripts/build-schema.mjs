@@ -46,27 +46,31 @@ const HEADER = `-- ${'='.repeat(77)}
 --
 -- The file asks for it too (\`create extension if not exists pg_cron\`), and in
 -- the SQL editor you are \`postgres\`, so that usually succeeds on its own. But if
--- it does not, three scheduled jobs silently never get created — and those three
--- are the retention promises: Google-sourced search results and cached geocodes
--- expiring on their own, whether or not the app is deployed or awake. Near the
--- end this file asserts all three are scheduled and re-schedules any that are
--- missing, so a missing pg_cron surfaces as an error there rather than as a year
--- of data that quietly failed to expire.
+-- it does not, five scheduled jobs silently never get created — and four of
+-- them are the retention promises: search results, cached geocodes, fetched
+-- reviews and recorded call speech expiring on their own, whether or not the app
+-- is deployed or awake. Part-way through, this file asserts the original three
+-- are scheduled and re-schedules any that are missing, so a missing pg_cron
+-- surfaces as an error there rather than as a year of data that quietly failed
+-- to expire.
 --
 -- AFTERWARDS, confirm the jobs exist:
 --
 --   select * from public.scheduled_jobs;
 --
--- Three rows: expire-search-results (03:15 UTC), expire-geocode-cache (03:20)
--- and purge-deleted-leads (03:45). The fourth scheduled job — the nightly Google
+-- Five rows: expire-search-results (03:15 UTC), expire-geocode-cache (03:20),
+-- purge-deleted-leads (03:45), expire-call-transcripts (04:00) and
+-- expire-place-reviews (04:10). The sixth scheduled job — the nightly Google
 -- refresh — is a Vercel cron rather than a database one, because it has to call
 -- Google and Postgres cannot. See vercel.json and the README.
 --
 -- WHAT YOU GET
 --
---   Transient side   searches, search_results
+--   Transient side   searches, search_results, place_review_fetches,
+--                    place_reviews, call_transcript_segments
 --   Permanent side   leads, lead_audits, lead_audit_findings, lead_scores,
---                    lead_notes, lead_activities, lead_refreshes,
+--                    lead_notes, lead_activities, lead_refreshes, calls,
+--                    call_briefings, call_tips, call_summaries,
 --                    lists, lead_lists, saved_views
 --   Cost control     api_usage, app_settings, geocode_cache
 --   Read models      leads_library, lead_score_queue, lead_scoring_inputs,

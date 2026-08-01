@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { readLatestBriefing } from '@/lib/assistant/store'
 import { createServiceClient } from '@/lib/supabase/server'
 import { isChangeCode } from '@/lib/leads/changes'
 import { today } from '@/lib/leads/dates'
@@ -1290,6 +1291,30 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   ])
   if (!lead) return null
 
+  /*
+   * The briefing hangs off the newest call, and the newest call is what
+   * `leads.latest_call_id` points at — maintained by trigger, like
+   * `latest_audit_id`. Read straight off `leads` rather than through
+   * `leads_library`: the view is a read model for the table and the map, nothing
+   * there filters or sorts on a call, and lifting a column into it that a
+   * hundred-row page would carry for nobody is the trade the imprint migration
+   * already refused once.
+   *
+   * After the lead rather than beside it, because whether the briefing is stale
+   * is a comparison against `lead.lastAuditedAt` and that number has to be in
+   * hand first.
+   */
+  const { data: callPointer } = await supabase
+    .from('leads')
+    .select('latest_call_id')
+    .eq('id', id)
+    .maybeSingle()
+
+  const briefing = await readLatestBriefing(
+    (callPointer?.latest_call_id as string | null) ?? null,
+    lead.lastAuditedAt,
+  )
+
   const movement = compareScores(previousScore, score)
 
   const { data: audits } = await supabase
@@ -1302,7 +1327,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
   const records = (audits ?? []) as unknown as AuditRecord[]
   const newest = records[0] ?? null
 
-  if (!newest) return { lead, audit: null, history: [], score, movement, timeline }
+  if (!newest) return { lead, audit: null, history: [], score, movement, timeline, briefing }
 
   const { data: findingRows } = await supabase
     .from('lead_audit_findings')
@@ -1341,7 +1366,7 @@ export async function readLeadDetail(id: string): Promise<LeadDetail | null> {
     psiPerformance: record.psi_performance,
   }))
 
-  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline }
+  return { lead, audit: toAudit(newest, findings), history, score, movement, timeline, briefing }
 }
 
 export async function updateLead(

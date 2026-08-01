@@ -182,6 +182,67 @@ export interface LeadProvider {
   resolveLocation?(text: string, ctx?: ProviderContext): Promise<ResolvedLocation | null>
 }
 
+/* ------------------------------------------------------------------------- *
+ * Reviews
+ *
+ * A second, much smaller boundary, and deliberately not part of `LeadProvider`.
+ *
+ * Reviews are not enrichment. Every other field this app holds is fetched for
+ * every saved lead, whether or not anybody ever rings it; reviews are fetched
+ * for the one lead about to be rung, seconds beforehand. Folding them into
+ * `getDetails` would put an Enterprise + Atmosphere field mask on the refresh
+ * pass — see `skus.ts` for what that costs across a book of a thousand leads
+ * you will phone forty of.
+ *
+ * So it is its own interface, satisfied today by the same Google account and
+ * one day, plausibly, by a source that returns all of them instead of five.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One review, with the person who wrote it left out.
+ *
+ * Google returns an `authorAttribution` block on every review: a display name,
+ * a profile URL and a photo. None of it is kept, for the same reason the
+ * Impressum check does not extract the natural person it is legally required to
+ * find. The operator is about to say "your last three reviews mention the
+ * parking" on the phone; he is not about to say a customer's name, and holding
+ * one would be holding a stranger's data for no purpose this product has.
+ */
+export interface ProviderReview {
+  /** Stable within the provider. Google's review resource name. */
+  providerReviewId: string
+  /** 1–5. Null when the provider did not report one. */
+  rating: number | null
+  /** The review as written. Null for a rating left with no words. */
+  text: string | null
+  /** The language the text is in, as the provider reports it. */
+  languageCode: string | null
+  publishedAt: string | null
+  /** The provider's own phrasing of the age — "a month ago". Verbatim. */
+  relativeAge: string | null
+}
+
+export interface ReviewsResult {
+  reviews: ProviderReview[]
+  /** What this fetch cost at list price. Empty when served from cache. */
+  cost: CostEvent[]
+}
+
+export interface ReviewProvider {
+  readonly id: string
+  readonly label: string
+  /**
+   * The most a single fetch can return.
+   *
+   * Google's is five, and that is Google's limit rather than a decision made
+   * here — a provider that returns two hundred says two hundred, and nothing
+   * above this line has to change.
+   */
+  readonly maxReviews: number
+
+  getReviews(providerPlaceId: string, ctx?: ProviderContext): Promise<ReviewsResult>
+}
+
 /**
  * Thrown by the spend guard, not by the provider. Separate from a transport
  * failure because it is not an error condition — it is the ceiling working.
@@ -203,7 +264,7 @@ export class BudgetExceededError extends Error {
 
 /** A provider refused or failed. Carries the stage so the UI can say what broke. */
 export class ProviderError extends Error {
-  readonly stage: 'geocode' | 'search' | 'details'
+  readonly stage: 'geocode' | 'search' | 'details' | 'reviews'
   readonly status?: number
 
   constructor(stage: ProviderError['stage'], message: string, status?: number) {
