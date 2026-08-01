@@ -490,6 +490,45 @@ export interface StoredSummary {
  */
 export type NoSummaryReason = 'no_transcript' | 'transcript_expired'
 
+/**
+ * One past attempt, as the lead page reads it back.
+ *
+ * THE READ SIDE OF THE THREE COLUMNS THE HANDOVER FILLS. `calls.outcome`,
+ * `status_before` and `status_after` were being written and going nowhere a
+ * person could see them — the only consumer was the next briefing, which is a
+ * prompt rather than a screen. A column written by a press and read by nothing
+ * is a column that goes wrong quietly, because nobody is ever looking at it.
+ *
+ * The summary rides along because it is the point of the row. Fourteen days
+ * after the call, `body` is the entire record of what was said, and a history
+ * that listed dates and outcomes without it would be an index to something that
+ * had been deleted.
+ *
+ * Deliberately NOT carrying the transcript, the tips, or the briefing. Those are
+ * the call surface's business and it is one link away; a lead page that inlined
+ * them would be rendering four calls' worth of a conversation nobody opened.
+ */
+export interface CallHistoryEntry {
+  id: string
+  /**
+   * The zero of the call's own timeline.
+   *
+   * Re-stamped by `markListening` when Start is pressed, so on a call that was
+   * actually listened to this is when the line opened rather than when the
+   * operator pressed Prepare. On one that was prepared and never opened it is
+   * still the moment he decided to ring — which is what the row records.
+   */
+  startedAt: string
+  /** Null means it was never closed off. A real state; see the column comment. */
+  endedAt: string | null
+  outcome: string | null
+  statusBefore: LeadStatus | null
+  /** Where the lead went, when the operator took the suggestion. Null otherwise. */
+  statusAfter: LeadStatus | null
+  /** What survives. Null when none was written, which is not the same as an empty one. */
+  summary: { body: string; accepted: boolean | null } | null
+}
+
 /* ------------------------------------------------------------------------- *
  * The three of them, as one thing to hold
  * ------------------------------------------------------------------------- */

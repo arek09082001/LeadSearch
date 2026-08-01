@@ -1,4 +1,4 @@
-import type { StoredBriefing } from '@/lib/assistant/types'
+import type { CallHistoryEntry, StoredBriefing } from '@/lib/assistant/types'
 import { CHANGE_CODES, type ChangeCode } from '@/lib/leads/changes'
 import {
   FINDING_CODES,
@@ -613,6 +613,19 @@ export interface LeadDetail {
    * derived from the audit rather than being the audit.
    */
   briefing: StoredBriefing | null
+  /**
+   * Every attempt on this lead, newest first.
+   *
+   * Separate from `timeline` on purpose, and the separation is the same one the
+   * calls migration drew when it refused to write a row into `lead_activities`
+   * per ring. The timeline is prose he wrote and changes Google made; this is a
+   * structured record of attempts, most of which produced neither. Folding
+   * unanswered calls into the timeline would bury the history it exists for.
+   *
+   * Empty on the thousand leads that have never been phoned, which is the
+   * ordinary case and renders as nothing at all.
+   */
+  calls: CallHistoryEntry[]
 }
 
 /* ------------------------------------------------------------------------- *
