@@ -3,7 +3,13 @@ import { notFound } from 'next/navigation'
 
 import { CallAssistant } from '@/components/calls/call-assistant'
 import { CallBriefing } from '@/components/leads/call-briefing'
-import { readCall, readLatestBriefing, readSegments, readTips } from '@/lib/assistant/store'
+import {
+  readCall,
+  readLatestBriefing,
+  readLatestSummary,
+  readSegments,
+  readTips,
+} from '@/lib/assistant/store'
 import { readLead } from '@/lib/leads/repository'
 
 /*
@@ -56,10 +62,20 @@ export default async function CallPage({ params }: Props) {
    * everything it has already said. Only the trigger and its timestamp are
    * needed for that, which is all `ShownTip` is.
    */
-  const [briefing, segments, tips] = await Promise.all([
+  /*
+   * The summary comes back too, for the same reason the tips do.
+   *
+   * A summary already written is a summary that must not be written again by a
+   * reload — `call_summaries` allows several rows per call, so a page that
+   * generated on mount would quietly accumulate paragraphs about one
+   * conversation, each with `accepted` null. Read here, the surface opens on
+   * what is already there and only the Stop button produces a new one.
+   */
+  const [briefing, segments, tips, summary] = await Promise.all([
     readLatestBriefing(call.id, lead.lastAuditedAt),
     readSegments(call.id),
     readTips(call.id),
+    readLatestSummary(call.id),
   ])
 
   return (
@@ -73,6 +89,8 @@ export default async function CallPage({ params }: Props) {
       closed={call.endedAt !== null}
       initialSegments={segments}
       initialTips={tips.map((tip) => ({ trigger: tip.trigger, atMs: tip.atMs }))}
+      initialSummary={summary}
+      initialOutcome={call.outcome}
       /*
        * The briefing twice: once as data for the rules, once as markup for the
        * eye. See `CallAssistantProps.prepared` for why neither can stand in for

@@ -409,6 +409,25 @@ export interface CallSummary {
   suggestedStatus: LeadStatus | null
   /** One sentence: the next thing to do. Null when there is nothing to do. */
   suggestedNextAction: string | null
+  /**
+   * How many days out a callback was agreed, or null when none was.
+   *
+   * DAYS RATHER THAN A DATE, and the reason is the one stated at the top of
+   * `briefing-input.ts`: nothing behind this boundary may read a clock. A
+   * fixture is data and cannot compute one; a model would have to be told what
+   * today is and would then be arguing about a calendar rather than about what
+   * was said. An offset is what a provider actually hears — "Thursday",
+   * "in a week", "after the holidays" — and it is reproducible a year later.
+   *
+   * The store resolves it against `calls.ended_at`, once, and what is written to
+   * `call_summaries.suggested_follow_up_at` is a day. See that column's comment
+   * for why the offset must not be the thing that survives.
+   *
+   * Null is the ordinary answer. Most calls agree nothing, and a provider that
+   * always returned a number would fill the follow-up queue with dates the
+   * business never heard.
+   */
+  suggestedFollowUpDays: number | null
 }
 
 export interface SummaryProvider {
@@ -418,6 +437,58 @@ export interface SummaryProvider {
     ctx?: AssistantContext,
   ): Promise<CallSummary>
 }
+
+/**
+ * A summary as the surface reads it back, with the day resolved and the
+ * operator's verdict on it.
+ *
+ * The counterpart to `StoredBriefing`, and here for the same reason: the call
+ * screen is a client component and has to be able to name this shape without
+ * importing a module that opens a database.
+ *
+ * `suggestedFollowUpDays` is deliberately NOT carried through. By the time a
+ * summary is a row the offset has been spent — it was resolved against the end
+ * of the call and the answer is `suggestedFollowUpAt`. Carrying both would put
+ * two versions of the same suggestion on screen, and the one computed from the
+ * reader's own clock would be the wrong one.
+ */
+export interface StoredSummary {
+  id: string
+  callId: string
+  generatedAt: string
+  provider: string
+  model: string | null
+  body: string
+  suggestedStatus: LeadStatus | null
+  suggestedNextAction: string | null
+  /** `2026-08-04`, a plain day. Null when nothing was agreed on the call. */
+  suggestedFollowUpAt: string | null
+  /**
+   * Whether the operator took anything from it.
+   *
+   * Three states, and the third is the useful one — null means he has not
+   * looked. See the column comment: a default of false would file every
+   * unreviewed summary as a rejection and make the assistant look worse the
+   * busier he was.
+   */
+  accepted: boolean | null
+}
+
+/**
+ * Why there is no summary, when there is no summary.
+ *
+ * Both of these are honest answers rather than failures, and they are separate
+ * because the operator can do something about one of them. `no_transcript` means
+ * nobody pressed Start — he can still write a note by hand and the words were
+ * never lost, they were never taken. `transcript_expired` means the words were
+ * taken and the fourteen days ran out: there is nothing left to summarise and
+ * there never will be again.
+ *
+ * A provider is never asked in either case. Summarising an empty transcript
+ * would produce a plausible paragraph about a call nobody has a record of, which
+ * is the one thing this surface must not put in front of the operator.
+ */
+export type NoSummaryReason = 'no_transcript' | 'transcript_expired'
 
 /* ------------------------------------------------------------------------- *
  * The three of them, as one thing to hold

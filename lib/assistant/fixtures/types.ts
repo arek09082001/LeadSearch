@@ -52,6 +52,16 @@ export interface FixtureSummary {
   body: string
   suggestedStatus: LeadStatus | null
   suggestedNextAction: string | null
+  /**
+   * The callback, in days from the end of the call. Null when none was agreed.
+   *
+   * A number rather than a date because a fixture is data and data has no clock
+   * — the same rule that keeps every other placeholder in here from computing
+   * anything. It has to agree with `suggestedNextAction`: a fixture whose prose
+   * says "call back Thursday" and whose offset says a fortnight would put two
+   * different promises on the same screen.
+   */
+  suggestedFollowUpDays: number | null
 }
 
 export interface AssistantFixture {

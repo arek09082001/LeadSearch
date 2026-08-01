@@ -420,6 +420,10 @@ export class MockSummaryProvider implements SummaryProvider {
       body: fillLoose(fixture.summary.body, values),
       suggestedStatus: fixture.summary.suggestedStatus,
       suggestedNextAction: fixture.summary.suggestedNextAction,
+      // Passed through, not computed. A mock that worked out a date from its own
+      // clock would be a mock the surface could not be built against — see
+      // `CallSummary.suggestedFollowUpDays`.
+      suggestedFollowUpDays: fixture.summary.suggestedFollowUpDays,
     }
   }
 }

@@ -131,5 +131,6 @@ export const NO_WEBSITE: AssistantFixture = {
       'Someone in the family had been going to build a site and it has not moved in months. No price discussed.',
     suggestedStatus: 'contacted',
     suggestedNextAction: 'Call back in a week with two examples of one-page sites for a business their size.',
+    suggestedFollowUpDays: 7,
   },
 }
