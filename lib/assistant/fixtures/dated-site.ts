@@ -100,6 +100,26 @@ export const DATED_SITE: AssistantFixture = {
 
   tips: [
     {
+      trigger: 'what_is_this_about',
+      cues: ['worum geht es', 'worum gehts', 'um was geht es', 'was wollen sie', 'was ist denn los'],
+      body: 'Ein Satz: Handy-Wert und tote Jahreszahl. Dann fragen.',
+    },
+    {
+      trigger: 'named_a_need',
+      cues: ['müsste mir', 'für mich das wichtigste', 'wäre mir wichtig', 'wäre nicht schlecht'],
+      body: 'Seine Worte notieren. Den Bericht genau darauf zuschneiden.',
+    },
+    {
+      trigger: 'too_many_calls',
+      cues: ['viele anrufe', 'ständig am telefon', 'immer die gleichen fragen'],
+      body: 'Die Seite kann das beantworten. Weniger Anrufe, nicht mehr.',
+    },
+    {
+      trigger: 'slot_named',
+      cues: ['hätte ich puffer', 'eher schlecht', 'passt mir', 'da kann ich', 'kalenderwoche'],
+      body: 'Tag und Uhrzeit fest. Dann Adresse für den Bericht.',
+    },
+    {
       trigger: 'happy_as_is',
       cues: ['funktioniert doch', 'läuft doch', 'keiner beschwert', 'sieht gut aus', 'sind zufrieden'],
       body: 'Bitten, die Seite am Handy aufzumachen. Dann nichts mehr sagen.',

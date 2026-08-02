@@ -1,5 +1,10 @@
 import { BOUNDS, NO_FOLLOW_UP, NONE } from '@/lib/assistant/anthropic/shapes'
-import { TIP_SPECS, TIP_TRIGGERS } from '@/lib/assistant/vocabulary'
+import {
+  PREPARABLE_TRIGGERS,
+  TIP_SPECS,
+  TIP_TRIGGERS,
+  type TipTrigger,
+} from '@/lib/assistant/vocabulary'
 import { LEAD_STATUSES } from '@/lib/leads/types'
 import type {
   AssistantLead,
@@ -106,8 +111,17 @@ the call instead of before it.
               call. Not spoken, so no Sie — it is a caption, not a sentence.
   opening     SPOKEN, so Sie. The first thing he says when they pick up. One or two
               sentences, ready to be said exactly as written. It is a cold call to a stranger
-              who is working: say who you are, why you are calling, and ask them something.
-              Never open with a compliment.
+              who is working, and it has three moves in this order: who he is, the ONE
+              checkable thing he found, and a question. Never open with a compliment, never
+              open with a benefit, and never open with what he does for a living.
+              THE QUESTION IS THE HALF THAT GETS DROPPED AND IT IS THE HALF THAT WORKS. It
+              has to be answerable in a sentence and it must not be answerable with yes or
+              no — "haben Sie einfach keine, oder ist sie nur nicht verlinkt?" beats "hätten
+              Sie Interesse?", which ends the call in one word. Ask about THEIR situation,
+              never about his offer.
+              Write it so it still works if they cut in with "worum geht es denn?" first.
+              That is the most common thing said on these calls, and an opening that only
+              makes sense uninterrupted is one he cannot use.
   points      ${BOUNDS.MIN_POINTS} to ${BOUNDS.MAX_POINTS} facts worth saying, strongest first. 'label' is two or three words and
               is a caption for him; 'detail' is ONE sentence he says out loud, so Sie. Set
               'code' to the finding the point argues from, or '${NONE}' when the point is not a
@@ -119,6 +133,16 @@ the call instead of before it.
               'trigger' to the situation from the list below that the objection is the
               prepared form of, or '${NONE}'. These replies are reused live during the call,
               so write each one as something to DO or SAY, not as an observation.
+              THERE ARE ONLY ${BOUNDS.MAX_OBJECTIONS} SLOTS AND THEY ARE THE MOST VALUABLE FIELD HERE. Spend them on
+              what decides THIS call, worst first, and start with the doubt rather than with
+              a detail: a business with no website says "ich weiß nicht, ob mir das was
+              bringt" long before it asks what it costs. Never spend a slot on a situation
+              this lead cannot be in.
+              WHEN AN OBJECTION CANNOT BE ANSWERED WITH ANYTHING MEASURED, CONCEDE AND ASK.
+              The value question is the one this applies to every time — nothing here
+              measured what a website would earn them, so the reply agrees that nobody knows
+              yet and asks what it would have to do. That is not a softer answer than an
+              argument, it is the only one he can defend.
   ask         SPOKEN, so Sie. What he asks for before hanging up. One sentence, always
               present, and modest: a ten-minute conversation, a look at a report, an email
               address. Never a sale.
@@ -238,9 +262,18 @@ function describeReviews(reviews: BriefingInput['reviews']): string {
   return `REVIEWS — what their own customers wrote. Never name a reviewer:\n${rows.join('\n')}`
 }
 
-/** The trigger vocabulary, so an objection can be filed under the right one. */
-function describeTriggers(): string {
-  const rows = TIP_TRIGGERS.map((trigger) => `  ${trigger}: ${TIP_SPECS[trigger].when}`)
+/**
+ * The trigger vocabulary, so an objection can be filed under the right one.
+ *
+ * The briefing is shown `PREPARABLE_TRIGGERS` and the live tip is shown all of
+ * them, which is the difference between the two jobs rather than a detail. A
+ * briefing cannot prepare an answer to the clock — there is nothing to answer —
+ * and a reply filed under one of those would be dropped by `composeTip` and
+ * never reach a card. The tip provider is the thing that is asked mid-call and
+ * has to be able to say "you have not marked consent".
+ */
+function describeTriggers(triggers: readonly TipTrigger[] = TIP_TRIGGERS): string {
+  const rows = triggers.map((trigger) => `  ${trigger}: ${TIP_SPECS[trigger].when}`)
   return `THE SITUATIONS AN OBJECTION MAY BE FILED UNDER:\n${rows.join('\n')}`
 }
 
@@ -257,7 +290,7 @@ export function briefingPrompt(input: BriefingInput): string {
     '',
     describeReviews(input.reviews),
     '',
-    describeTriggers(),
+    describeTriggers(PREPARABLE_TRIGGERS),
     '',
     'Write the briefing.',
   ].join('\n')
@@ -290,6 +323,13 @@ ONE MICROPHONE HEARS ONE ROOM. The transcript does not reliably say who was spea
 he talks more than they do. Do not react to a phrase that is more likely to be his own —
 he offers to send things, he names findings out loud, he asks about their website
 constantly. React to what the BUSINESS said.
+
+NOT EVERY MOMENT WORTH A CARD IS AN OBJECTION, and the ones that are not are the ones he
+misses. A business saying what it would want, complaining about its own phone, or naming a
+week it has time is handing him the sale, and all three are easy to agree with and then
+talk straight past. Those moments outrank most objections here. When one happens, the move
+is never to argue and never to pitch — it is to write down what they said, or to pin down
+the day and get the address before the call ends.
 
 The body is German, and it is the tool talking to HIM — so infinitive or bare imperative, no
 Sie, no politeness. "Fragen, wann sie zuletzt von denen gehört haben." or "Nicht beziffern.

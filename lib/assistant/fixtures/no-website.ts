@@ -57,6 +57,28 @@ export const NO_WEBSITE: AssistantFixture = {
     ],
     objections: [
       {
+        /*
+         * FIRST, because it is the call.
+         *
+         * "Ich weiß nicht, ob mir eine Website was bringt" is the first thing a
+         * business with no website says, and the list is read worst-first — by
+         * the operator before he dials, and by `manualTip` when he presses a key
+         * and asks for something. It was not on this list while the product was
+         * named after this exact conversation.
+         *
+         * THE REPLY CONCEDES. Every argument available for the other side is a
+         * claim about their business that nothing here measured — see `avoid`,
+         * which forbids three of them by name — so the honest move and the one
+         * that works are the same move: agree that nobody knows yet, and ask
+         * what it would have to do. The answer is the brief.
+         */
+        objection: 'Ich weiß nicht, ob mir eine Website was bringt.',
+        reply:
+          'Ehrlich gesagt weiß ich das auch noch nicht — sagen Sie mir, was sie können müsste, ' +
+          'dann sehen wir, ob sich das für Sie überhaupt rechnet.',
+        trigger: 'doubts_the_value',
+      },
+      {
         objection: 'Wir kriegen alles über Empfehlung.',
         reply:
           'Genau deshalb lohnt es sich — eine Empfehlung endet damit, dass jemand Ihren Namen eintippt. Von dem Moment rede ich.',
@@ -90,6 +112,45 @@ export const NO_WEBSITE: AssistantFixture = {
   },
 
   tips: [
+    /*
+     * The first four are the opening, and they were added after a real call of
+     * this exact type went three minutes with nothing on screen — see
+     * `LOGISTICS_CALL`. A conversation with a business that has no website is
+     * decided before the first objection: they ask what this is about, they
+     * confirm there is nothing, they doubt the category, and then — if it is
+     * going well — they say what would change their mind. All four happen in
+     * the first ninety seconds and none of them is an objection.
+     */
+    {
+      trigger: 'what_is_this_about',
+      cues: ['worum geht es', 'worum gehts', 'um was geht es', 'was wollen sie', 'was ist denn los'],
+      body: 'Ein Satz: Eintrag ohne Seite. Dann eine Frage stellen.',
+    },
+    {
+      trigger: 'no_website_confirmed',
+      cues: ['habe ich keine', 'hab ich keine', 'haben wir keine', 'nie dazu gekommen', 'wollte ich immer mal'],
+      body: 'Fragen, wie Kunden ihn heute finden. Noch nichts anbieten.',
+    },
+    {
+      trigger: 'doubts_the_value',
+      cues: ['weiß nicht ob', 'weiß auch nicht ob', 'was bringt mir das', 'brauche ich sowas', 'ob sich das lohnt'],
+      body: 'Nicht argumentieren. Fragen, was die Seite können müsste.',
+    },
+    {
+      trigger: 'named_a_need',
+      cues: ['müsste mir', 'für mich das wichtigste', 'wäre mir wichtig', 'wäre nicht schlecht'],
+      body: 'Seine Worte notieren. Das Angebot genau daran aufhängen.',
+    },
+    {
+      trigger: 'too_many_calls',
+      cues: ['viele anrufe', 'ständig am telefon', 'komme nicht zum arbeiten', 'immer die gleichen fragen'],
+      body: 'Formular und häufige Fragen anbieten. Filtert Anrufe.',
+    },
+    {
+      trigger: 'slot_named',
+      cues: ['hätte ich puffer', 'eher schlecht', 'passt mir', 'da kann ich', 'kalenderwoche'],
+      body: 'Tag und Uhrzeit fest. Dann E-Mail-Adresse holen.',
+    },
     {
       trigger: 'already_have_someone',
       cues: ['neffe', 'mein sohn', 'meine tochter', 'ein bekannter', 'macht mir jemand', 'haben eine agentur'],

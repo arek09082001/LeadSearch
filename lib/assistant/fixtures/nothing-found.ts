@@ -86,6 +86,32 @@ export const NOTHING_FOUND: AssistantFixture = {
 
   tips: [
     {
+      trigger: 'what_is_this_about',
+      cues: ['worum geht es', 'worum gehts', 'um was geht es', 'was wollen sie', 'was ist denn los'],
+      body: 'Ehrlich sein: nichts gefunden. Deshalb die eine Frage.',
+    },
+    {
+      /*
+       * The value question lands hardest on this call, and that is why it is
+       * here rather than only in `no_website`. Every other fixture has a finding
+       * to answer it with; this one has nothing wrong to point at, so the only
+       * honest reply is the question back.
+       */
+      trigger: 'doubts_the_value',
+      cues: ['weiß nicht ob', 'weiß auch nicht ob', 'was bringt mir das', 'brauche ich sowas', 'ob sich das lohnt'],
+      body: 'Nicht überzeugen wollen. Fragen, was ihm fehlen würde.',
+    },
+    {
+      trigger: 'named_a_need',
+      cues: ['müsste mir', 'für mich das wichtigste', 'wäre mir wichtig', 'wäre nicht schlecht'],
+      body: 'Da ist der Aufhänger. Seine Worte notieren.',
+    },
+    {
+      trigger: 'slot_named',
+      cues: ['hätte ich puffer', 'eher schlecht', 'passt mir', 'da kann ich', 'kalenderwoche'],
+      body: 'Tag und Uhrzeit fest. Dann E-Mail-Adresse holen.',
+    },
+    {
       trigger: 'happy_as_is',
       cues: ['suchen nichts', 'sind zufrieden', 'keiner beschwert', 'passt schon', 'läuft gut'],
       body: 'Zustimmen, die eine Frage stellen und auflegen.',
