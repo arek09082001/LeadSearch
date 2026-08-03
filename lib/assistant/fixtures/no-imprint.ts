@@ -94,6 +94,21 @@ export const NO_IMPRINT: AssistantFixture = {
 
   tips: [
     {
+      trigger: 'what_is_this_about',
+      cues: ['worum geht es', 'worum gehts', 'um was geht es', 'was wollen sie', 'was ist denn los'],
+      body: 'Ein Satz: kein Impressum gefunden. Sachlich, keine Drohung.',
+    },
+    {
+      trigger: 'named_a_need',
+      cues: ['müsste mir', 'für mich das wichtigste', 'wäre mir wichtig', 'wäre nicht schlecht'],
+      body: 'Seine Worte notieren. Später daran anknüpfen.',
+    },
+    {
+      trigger: 'slot_named',
+      cues: ['hätte ich puffer', 'eher schlecht', 'passt mir', 'da kann ich', 'kalenderwoche'],
+      body: 'Tag und Uhrzeit fest. Dann E-Mail-Adresse holen.',
+    },
+    {
       trigger: 'privacy_worry',
       cues: ['woher haben sie', 'wie kommen sie an', 'meine daten', 'wer hat ihnen', 'dsgvo', 'datenschutz'],
       body: 'Google-Eintrag und ihre Website. Gerade hier sauber beantworten.',

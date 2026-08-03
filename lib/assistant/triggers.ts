@@ -2,6 +2,9 @@ import type { Briefing, ShownTip } from '@/lib/assistant/types'
 import {
   CONSENT_GRACE_MS,
   LONG_CALL_MS,
+  OPENING_FROM_MS,
+  OPENING_UNTIL_MS,
+  PREPARABLE_TRIGGERS,
   TIP_SPECS,
   type TipTrigger,
 } from '@/lib/assistant/vocabulary'
@@ -47,18 +50,28 @@ import {
  * ONE MICROPHONE ON A SPEAKERPHONE HEARS ONE ROOM: `TranscriptSegment.speaker`
  * is `unknown` on every line this surface writes, and no rule here can tell the
  * two voices apart. So a phrase that the OPERATOR says will fire a tip at him
- * about his own sentence. The fixture call is the proof and was used as one:
+ * about his own sentence. The fixture calls are the proof and were used as one:
  *
  *   "…nur darum was es Sie kostet wenn jemand vorher abspringt"   (operator)
  *   "…und was soll das dann kosten"                               (business)
  *
- * Both contain "kost". Only the second is a price question. Hence `was kostet`
- * and `was soll das kosten` rather than `kosten`, hence `schicken sie mir`
- * rather than `per mail` — the operator offers to send things constantly — and
- * hence `abmahnung` rather than `impressum`, because naming the imprint finding
- * is what the operator does for a living and raising it is what a worried
- * customer does. Every rule below has been checked against the operator's lines
- * in that fixture, and the demo script re-checks it.
+ *   "…was würde denn für sie heißen wenn eine Webseite ihm was bringt"  (operator)
+ *   "…ich weiß auch nicht ob eine Website für mich was bringt"          (business)
+ *
+ * Both pairs collide on the obvious word. Only the second line of each is the
+ * situation. Hence `was kostet` and `was soll das kosten` rather than `kosten`;
+ * hence `weiss nicht ob` and `was bringt mir das` rather than `was bringt`,
+ * because asking what a site would have to do is the operator's best move and a
+ * tip must never interrupt it; hence `schicken sie mir` rather than `per mail`,
+ * because he offers to send things constantly; hence `habe ich keine` rather
+ * than `keine website`, because naming the absence is his opening; and hence
+ * `abmahnung` rather than `impressum`, because naming the imprint finding is
+ * what he does for a living and raising it is what a worried customer does.
+ *
+ * Every rule below has been checked against the operator's lines in BOTH
+ * fixtures, and the demo script re-checks it. `LOGISTICS_CALL` is the one that
+ * matters most there: it is transcribed rather than written, so it is the only
+ * place these rules meet sentences that were not composed with them in mind.
  * ---------------------------------------------------------------------------
  */
 
@@ -181,6 +194,86 @@ interface TriggerRule {
  */
 const TRIGGER_RULES: TriggerRule[] = [
   {
+    /*
+     * The opening challenge. Their words, and only ever theirs.
+     *
+     * `worum geht es` and not `geht es um`, because the operator says the second
+     * one constantly — "mir geht es gar nicht darum das neu zu bauen" is in the
+     * speakerphone fixture — and the first is a question only the person who
+     * picked up ever asks.
+     */
+    trigger: 'what_is_this_about',
+    phrases: [
+      'worum geht es',
+      'worum gehts',
+      'um was geht es',
+      'um was gehts',
+      'worum handelt es sich',
+      'was ist denn los',
+      'was gibt es',
+      'was liegt an',
+      'wer sind sie',
+      'wer spricht da',
+      'mit wem spreche ich',
+      'was wollen sie',
+      'was kann ich fur sie tun',
+    ],
+  },
+  {
+    /*
+     * They say there is no website — in the first person, always.
+     *
+     * The whole rule is that constraint. The operator names the absence out loud
+     * on every one of these calls ("Sie haben gar keine Website da verlinkt" is
+     * the line from the logistics fixture), so anything matching `keine website`
+     * would answer his own opening back to him. `habe ich keine` is not
+     * something he can say about somebody else's business.
+     */
+    trigger: 'no_website_confirmed',
+    phrases: [
+      'habe ich keine',
+      'hab ich keine',
+      'haben wir keine',
+      'hatte ich nie',
+      'hatten wir nie',
+      'nie eine gehabt',
+      'nie dazu gekommen',
+      'ist nie fertig geworden',
+      'wollte ich immer mal',
+      'nur bei facebook',
+      'nur uber instagram',
+    ],
+  },
+  {
+    /*
+     * The value doubt, and the narrowest list here.
+     *
+     * "was bringt" on its own is the operator's own question — he asks what a
+     * site would have to do to be worth it, which is the right move and the one
+     * a tip should never interrupt. What the business says is a first-person
+     * doubt: it is always attached to `ich weiß nicht`, `mir`, `sowas` or
+     * `davon`, and every phrase below carries one of them.
+     */
+    trigger: 'doubts_the_value',
+    phrases: [
+      'weiss nicht ob',
+      'weiss auch nicht ob',
+      'ob mir das was bringt',
+      'ob das was bringt',
+      'ob sich das lohnt',
+      'was bringt mir das',
+      'was soll mir das bringen',
+      'was hab ich davon',
+      'was habe ich davon',
+      'bringt mir nichts',
+      'brauche ich sowas',
+      'brauch ich sowas',
+      'sowas uberhaupt',
+      'lohnt sich sowas',
+      'sehe da keinen sinn',
+    ],
+  },
+  {
     trigger: 'no_time',
     phrases: [
       'keine zeit',
@@ -299,6 +392,51 @@ const TRIGGER_RULES: TriggerRule[] = [
     ],
   },
   {
+    /*
+     * The sentence that says how to sell to them, and it is recognised by the
+     * "for me" in it rather than by the need itself.
+     *
+     * NEEDS CANNOT BE LISTED. "Gefunden werden", "Anrufe abfangen", "seriöser
+     * aussehen" — the list is as long as the trade, and half of it is wording
+     * the operator uses himself while pitching. What is not is the frame a
+     * person puts around their own requirement: `müsste mir`, `für mich das
+     * Wichtigste`, `wäre mir wichtig`. Those are first-person and he never says
+     * them about somebody else's business.
+     */
+    trigger: 'named_a_need',
+    phrases: [
+      'musste mir',
+      'musste fur mich',
+      'fur mich das wichtigste',
+      'ware mir wichtig',
+      'mir ware wichtig',
+      'wichtig ware mir',
+      'ware nicht schlecht',
+      'ware auch nicht schlecht',
+      'ware schon gut',
+      'das ware gut',
+      'was mich stort',
+      'ich hatte gern',
+      'ich mochte dass',
+      'was ich brauche ist',
+    ],
+  },
+  {
+    trigger: 'too_many_calls',
+    phrases: [
+      'viele anrufe',
+      'standig am telefon',
+      'immer am telefon',
+      'dauernd angerufen',
+      'dauernd an',
+      'telefon steht nicht still',
+      'komme nicht zum arbeiten',
+      'kann nicht standig rangehen',
+      'immer das gleiche gefragt',
+      'immer die gleichen fragen',
+    ],
+  },
+  {
     trigger: 'buying_signal',
     phrases: [
       'wie lauft das ab',
@@ -329,6 +467,37 @@ const TRIGGER_RULES: TriggerRule[] = [
       'finde keine leute',
       'keine mitarbeiter',
       'suchen leute',
+    ],
+  },
+  {
+    /*
+     * A day, an hour, or a week ruled out — all three are the same moment.
+     *
+     * "Nächste Woche ist eher schlecht bei mir" is an offer, not a refusal: the
+     * person saying it has already accepted that there will be a meeting and is
+     * negotiating when. The phrases are the ones that cannot be the operator's,
+     * who proposes times (`passt Ihnen Donnerstag`) rather than reports his own
+     * diary, and `passt mir` is here while `passt ihnen` is deliberately not.
+     */
+    trigger: 'slot_named',
+    phrases: [
+      'hatte ich zeit',
+      'hatte ich puffer',
+      'hatte ich luft',
+      'da kann ich',
+      'ist schlecht bei mir',
+      'ist bei mir schlecht',
+      'eher schlecht',
+      'passt mir',
+      'passt bei mir',
+      'ware mir lieber',
+      'geht bei mir',
+      'kalenderwoche',
+      'bin ich in',
+      'bin ich unterwegs',
+      'bin ich nicht da',
+      'vormittags besser',
+      'nachmittags besser',
     ],
   },
   {
@@ -408,6 +577,24 @@ export function matchTriggers(text: string, context: TriggerContext): TriggerMat
         atMs: context.atMs,
       })
     }
+  }
+
+  /*
+   * The opening, which outranks nothing and is meant not to.
+   *
+   * A WINDOW RATHER THAN A THRESHOLD, unlike the two below it. Both of those are
+   * true from the moment they become true and stay true; this one stops being
+   * worth saying the second the conversation starts, and a rule with no upper
+   * bound would put "Name, Grund, eine Frage" on screen at minute four on a call
+   * that simply had a quiet stretch.
+   */
+  if (context.atMs >= OPENING_FROM_MS && context.atMs < OPENING_UNTIL_MS) {
+    matches.push({
+      trigger: 'call_opening',
+      phrase: null,
+      weight: TIP_SPECS.call_opening.weight,
+      atMs: context.atMs,
+    })
   }
 
   /*
@@ -500,6 +687,19 @@ export function condense(text: string, maxWords: number = MAX_TIP_WORDS): string
  */
 export type TipSource = 'briefing' | 'standing' | 'provider'
 
+/**
+ * The triggers a briefing is allowed to answer for.
+ *
+ * Everything except the three that read the clock, and the exclusion is not
+ * bookkeeping. `call_opening` is the one that made it necessary: its whole
+ * argument is that the WORDS for the opening are already in the left column, so
+ * a card drawn from the briefing would be the assistant reading the briefing
+ * back to him — a glance spent on something he is already looking at. Consent
+ * and the twelve-minute mark are the same case for a different reason: nothing
+ * about this lead changes what to do about either.
+ */
+const PREPARABLE: ReadonlySet<TipTrigger> = new Set(PREPARABLE_TRIGGERS)
+
 export interface LiveTip {
   trigger: TipTrigger
   /** At most `MAX_TIP_WORDS` words. Guaranteed here rather than downstream. */
@@ -529,7 +729,9 @@ export function composeTip(
   trigger: TipTrigger,
   briefing: Briefing | null,
 ): { body: string; source: TipSource } {
-  const prepared = briefing?.objections.find((objection) => objection.trigger === trigger)
+  const prepared = PREPARABLE.has(trigger)
+    ? briefing?.objections.find((objection) => objection.trigger === trigger)
+    : undefined
 
   if (prepared?.reply) {
     return { body: condense(prepared.reply), source: 'briefing' }
@@ -614,6 +816,11 @@ export function manualTip(
 
   for (const objection of briefing.objections) {
     if (!objection.trigger || seen.has(objection.trigger)) continue
+    // A reply misfiled under a clock trigger is still a good line, but showing
+    // it would mark `call_opening` as spent and silence the rule that actually
+    // owns it. `PREPARABLE` is the same set `composeTip` reads, for the same
+    // reason.
+    if (!PREPARABLE.has(objection.trigger)) continue
     return {
       trigger: objection.trigger,
       body: condense(objection.reply),

@@ -33,8 +33,17 @@ export interface FixtureLine {
    * Never emitted. `TranscriptChunk.speaker` is `unknown` from this provider as
    * it is from the browser one, because the whole point of the mock is to be
    * honest about what a speakerphone can and cannot tell apart.
+   *
+   * `both` is the value a hand-written fixture never needs and a real one
+   * produces immediately: a recogniser breaks on silence rather than on the
+   * change of speaker, so a thirty-second segment routinely carries a question
+   * and its answer. See `LOGISTICS_CALL`, which is transcribed rather than
+   * written and is half made of them. The demo's "nothing fired on your own
+   * voice" check can only be asked of a line that is entirely one voice, so
+   * `both` is what excuses a line from it — and using it on a line that is
+   * really the operator's would be quietly turning that check off.
    */
-  speakerHint: 'operator' | 'business'
+  speakerHint: 'operator' | 'business' | 'both'
   text: string
 }
 

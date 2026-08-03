@@ -1,6 +1,11 @@
 import { LEAD_STATUSES, type LeadStatus } from '@/lib/leads/types'
 import { MAX_TIP_WORDS, condense } from '@/lib/assistant/triggers'
-import { TIP_TRIGGERS, isTipTrigger, type TipTrigger } from '@/lib/assistant/vocabulary'
+import {
+  PREPARABLE_TRIGGERS,
+  TIP_TRIGGERS,
+  isTipTrigger,
+  type TipTrigger,
+} from '@/lib/assistant/vocabulary'
 import type {
   Briefing,
   BriefingObjection,
@@ -111,7 +116,17 @@ export function briefingSchema(codes: readonly string[]) {
       items: object({
         objection: STRING,
         reply: STRING,
-        trigger: enumOf([NONE, ...TIP_TRIGGERS]),
+        /*
+         * The preparable half of the vocabulary, not all of it.
+         *
+         * The clock triggers are removed here for the same reason they are
+         * removed from the prompt's trigger list: `composeTip` will not draw a
+         * card from a reply filed under one, so offering the category would let
+         * the model spend one of five objection slots on an answer that can
+         * never reach the screen. The schema is where a rule like that gets
+         * enforced rather than requested — see the note at the top.
+         */
+        trigger: enumOf([NONE, ...PREPARABLE_TRIGGERS]),
       }),
     },
     ask: STRING,
