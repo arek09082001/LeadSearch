@@ -1,3 +1,4 @@
+import type { Deadline } from '@/lib/deadline'
 import type { FindingSeverity } from '@/lib/enrichment/vocabulary'
 import type { LeadStatus, WebsiteStatus } from '@/lib/leads/types'
 import type { TipTrigger } from '@/lib/assistant/vocabulary'
@@ -64,7 +65,7 @@ export interface AssistantOrigin {
 }
 
 /**
- * Per-call environment. One field today, and it is the load-bearing one.
+ * Per-call environment. The signal is still the load-bearing field.
  *
  * A tip requested at minute four is worthless at minute five — the conversation
  * has moved — so every request has to be abandonable, and a provider that
@@ -86,6 +87,21 @@ export interface AssistantOrigin {
  */
 export interface AssistantContext {
   signal?: AbortSignal
+  /**
+   * When the caller stops waiting, and therefore how long there is to answer.
+   *
+   * NOT THE SAME FACT AS THE SIGNAL, which is why both are here. The signal says
+   * this answer is no longer wanted; the deadline says how much of the operator's
+   * minute is left, and only the second one can be read BEFORE a request is
+   * made. A provider that knows it has six seconds left does not open a request
+   * that needs twenty and does not retry one that failed at second forty — and a
+   * provider given the signal alone can only find out afterwards, by being cut
+   * off, having spent the tokens.
+   *
+   * Optional, and every provider must work without it: the routes that hand one
+   * over are the ones running inside a platform limit, and a node session is not.
+   */
+  deadline?: Deadline
   /**
    * The `calls` row this request belongs to, written to `api_usage.call_id`.
    *

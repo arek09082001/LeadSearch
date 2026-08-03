@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { auth } from '@/auth'
+import { DeadlineExceededError } from '@/lib/deadline'
 
 /*
  * The session check every route handler owes before it touches data.
@@ -92,6 +93,18 @@ export function requireSchedule(request: Request): void {
 export function errorResponse(error: unknown): Response {
   if (error instanceof Unauthorized) {
     return Response.json({ error: error.message }, { status: 401 })
+  }
+  /*
+   * 504 rather than 500, and written by us rather than by the gateway.
+   *
+   * The distinction is the whole point of `lib/deadline.ts`: a 500 says the
+   * request cannot work and a 504 says it did not fit, and only the second one
+   * is worth pressing the button again for. It is also JSON, which is what the
+   * platform's own timeout page is not.
+   */
+  if (error instanceof DeadlineExceededError) {
+    console.error('[api] deadline exceeded', error.message)
+    return Response.json({ error: error.message }, { status: 504 })
   }
   const message = error instanceof Error ? error.message : 'The request failed.'
   console.error('[api]', error)

@@ -4,6 +4,7 @@ import { leadOf } from '@/lib/assistant/briefing-input'
 import { readCall, readLatestBriefing, readSegments } from '@/lib/assistant/store'
 import { AssistantError, type ShownTip } from '@/lib/assistant/types'
 import { isTipTrigger } from '@/lib/assistant/vocabulary'
+import { Deadline } from '@/lib/deadline'
 import { readLead } from '@/lib/leads/repository'
 
 /*
@@ -38,6 +39,27 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
+/**
+ * What the work gets, out of the thirty.
+ *
+ * THIRTY STAYS, unlike the other two model routes. Those two raised their limit
+ * because the generation behind them genuinely needs the room; this one is Haiku
+ * with thinking off, answering a man who pressed a key mid-sentence. A tip that
+ * took half a minute would arrive after the moment it was about, so the ceiling
+ * here is not the constraint and never was.
+ *
+ * WHAT THE DEADLINE BUYS IS THE REFUSAL. `attemptFor` will not open a request it
+ * cannot finish and will not retry one there is no room to retry, and both of
+ * those arrive as an `AssistantError` — which this route already turns into a
+ * quiet "unavailable" and the surface already answers with the prepared
+ * objection. That is the whole difference: without a deadline the operator waits
+ * out the platform's limit for nothing, and with one he gets his fallback tip.
+ *
+ * NOT RACED, for the same reason. The response this route owes is a 200 with a
+ * reason on it, never a gateway error mid-call.
+ */
+const BUDGET_MS = 25_000
+
 type Context = { params: Promise<{ id: string }> }
 
 /**
@@ -62,6 +84,8 @@ function parseShown(value: unknown): ShownTip[] {
 }
 
 export async function POST(request: Request, { params }: Context) {
+  const deadline = Deadline.in(BUDGET_MS, 'The tip')
+
   try {
     await requireSession()
     const { id } = await params
@@ -82,15 +106,18 @@ export async function POST(request: Request, { params }: Context) {
     ])
 
     const at = Math.max(atMs, 0)
-    const tip = await getAssistant().tip.suggest({
-      callId: call.id,
-      atMs: at,
-      lead: leadOf(lead),
-      consentNoted: call.consentNoted,
-      briefing: stored?.briefing ?? null,
-      transcript: segments.filter((segment) => segment.atMs >= at - TIP_WINDOW_MS),
-      alreadyShown: parseShown(body.shown),
-    })
+    const tip = await getAssistant().tip.suggest(
+      {
+        callId: call.id,
+        atMs: at,
+        lead: leadOf(lead),
+        consentNoted: call.consentNoted,
+        briefing: stored?.briefing ?? null,
+        transcript: segments.filter((segment) => segment.atMs >= at - TIP_WINDOW_MS),
+        alreadyShown: parseShown(body.shown),
+      },
+      { signal: deadline.signal, deadline, callId: call.id },
+    )
 
     // Null is a real answer and travels as one. The surface knows what to do
     // with it, and dressing it up as an error would make the honest case look
@@ -107,5 +134,7 @@ export async function POST(request: Request, { params }: Context) {
       return Response.json({ tip: null, unavailable: error.message })
     }
     return errorResponse(error)
+  } finally {
+    deadline.release()
   }
 }

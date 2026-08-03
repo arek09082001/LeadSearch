@@ -4,6 +4,7 @@ import { getAssistant } from '@/lib/assistant'
 import { leadOf } from '@/lib/assistant/briefing-input'
 import { readCall, readLatestSummary, readSegments, writeSummary } from '@/lib/assistant/store'
 import type { NoSummaryReason, StoredSummary } from '@/lib/assistant/types'
+import type { Deadline } from '@/lib/deadline'
 import { dateFrom } from '@/lib/leads/dates'
 import { readLead } from '@/lib/leads/repository'
 
@@ -71,7 +72,7 @@ function reasonFor(call: { startedAt: string; endedAt: string | null }): NoSumma
 
 export async function summariseCall(
   callId: string,
-  signal?: AbortSignal,
+  deadline?: Deadline,
 ): Promise<SummaryResult> {
   const call = await readCall(callId)
   if (!call) throw new Error('That call is not in the book.')
@@ -97,7 +98,8 @@ export async function summariseCall(
   // what the assistant knows about a business and it is the one the briefing
   // used; see the note on that function.
   const summary = await assistant.summary.summarise(transcript, leadOf(lead), {
-    signal,
+    signal: deadline?.signal,
+    deadline,
     callId: call.id,
   })
 
@@ -138,9 +140,9 @@ export async function summariseCall(
  */
 export async function summariseCallOnce(
   callId: string,
-  signal?: AbortSignal,
+  deadline?: Deadline,
 ): Promise<SummaryResult> {
   const existing = await readLatestSummary(callId)
   if (existing) return { summary: existing, reason: null }
-  return summariseCall(callId, signal)
+  return summariseCall(callId, deadline)
 }

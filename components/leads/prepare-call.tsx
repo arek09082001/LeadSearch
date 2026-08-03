@@ -5,6 +5,29 @@ import { useRef, useState } from 'react'
 
 import { CommandButton } from '@/components/ui/command-button'
 
+/** What the route answers with, on the way in and on the way out. */
+interface PrepareBody {
+  reviewsError?: string | null
+  error?: string
+}
+
+/**
+ * The body, or nothing, without ever throwing about the shape of it.
+ *
+ * `response.json()` on a page the gateway wrote — a timeout, a 502, a deploy
+ * mid-request — throws `Unexpected token 'A'`, which is a true statement about
+ * the first character of "An error occurred" and tells the operator nothing at
+ * all about what went wrong. The route now answers in JSON even when it runs out
+ * of time; this is the second lock, for the errors no route gets to write.
+ */
+async function readBody(response: Response): Promise<PrepareBody | null> {
+  try {
+    return (await response.json()) as PrepareBody
+  } catch {
+    return null
+  }
+}
+
 /*
  * The control that turns a diagnosis into an opening line.
  *
@@ -39,8 +62,13 @@ export function PrepareCall({ leadId, prepared }: { leadId: string; prepared: bo
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ leadId }),
       })
-      const body = (await response.json()) as { reviewsError?: string | null; error?: string }
-      if (!response.ok) throw new Error(body.error ?? 'The briefing could not be prepared.')
+      const body = await readBody(response)
+      if (!response.ok) {
+        throw new Error(
+          body?.error ?? `The briefing could not be prepared. (HTTP ${response.status})`,
+        )
+      }
+      if (!body) throw new Error('The briefing could not be prepared. The answer was not readable.')
 
       /*
        * A briefing written without reviews is still a briefing, so this is a

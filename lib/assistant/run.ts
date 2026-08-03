@@ -12,6 +12,7 @@ import {
 } from '@/lib/assistant/store'
 import type { CachedReviews } from '@/lib/assistant/store'
 import type { StoredBriefing } from '@/lib/assistant/types'
+import { Deadline, capped } from '@/lib/deadline'
 import { readLeadDetail } from '@/lib/leads/repository'
 import { getReviewProvider } from '@/lib/providers'
 import { BudgetExceededError, ProviderError } from '@/lib/providers/types'
@@ -58,6 +59,17 @@ export interface PreparedBriefing {
 }
 
 /**
+ * How long the reviews may take before the briefing goes ahead without them.
+ *
+ * Its own cap rather than a share of the request's, because these two are not
+ * the same kind of thing: the briefing is what the operator pressed the button
+ * for and the reviews are colour on top of it. Eight seconds is long enough for
+ * Google on a bad day and short enough that a Google which has stopped answering
+ * altogether costs a sentence on screen rather than the whole call.
+ */
+const REVIEWS_BUDGET_MS = 8_000
+
+/**
  * The review set for a place: from cache when there is a live one, from Google
  * otherwise, and null when Google could not be asked.
  *
@@ -67,15 +79,38 @@ export interface PreparedBriefing {
 async function loadReviews(
   googlePlaceId: string,
   guard: SpendGuard,
+  deadline: Deadline | undefined,
 ): Promise<{ reviews: CachedReviews | null; error: string | null; cached: boolean }> {
   const cached = await readCachedReviews(googlePlaceId)
   if (cached) return { reviews: cached, error: null, cached: true }
 
+  /*
+   * The context is assembled here rather than being the guard itself, exactly as
+   * `lib/search/run.ts` assembles it: the guard owns money, the signal owns the
+   * connection, and neither should have to know about the other. Passing the
+   * guard straight through — which is what this did — meant `ctx.signal` was
+   * always undefined and this fetch had no time limit of any kind.
+   */
+  const leg = capped(deadline, REVIEWS_BUDGET_MS, 'Google')
+
   try {
     const provider = getReviewProvider()
-    const { reviews } = await provider.getReviews(googlePlaceId, guard)
+    const { reviews } = await provider.getReviews(googlePlaceId, {
+      signal: leg.signal,
+      authorizeSpend: guard.authorizeSpend,
+      recordSpend: guard.recordSpend,
+    })
     return { reviews: await writeReviews(googlePlaceId, reviews), error: null, cached: false }
   } catch (error) {
+    /*
+     * The one failure this leg may not absorb is the whole request running out
+     * of time. Everything else here degrades into a note beside the briefing;
+     * this would degrade into carrying on to a model call with no budget left to
+     * make it with, and the operator would wait out the rest of the minute for
+     * an answer that could not arrive.
+     */
+    if (deadline?.expired) throw error
+
     if (error instanceof BudgetExceededError || error instanceof ProviderError) {
       return { reviews: null, error: error.message, cached: false }
     }
@@ -85,12 +120,14 @@ async function loadReviews(
     const message = error instanceof Error ? error.message : 'The reviews could not be fetched.'
     console.error('[assistant] review fetch failed', { googlePlaceId, message })
     return { reviews: null, error: message, cached: false }
+  } finally {
+    leg.release()
   }
 }
 
 export async function prepareBriefing(
   leadId: string,
-  signal?: AbortSignal,
+  deadline?: Deadline,
 ): Promise<PreparedBriefing> {
   const detail = await readLeadDetail(leadId)
   if (!detail) throw new Error('That lead is not in the book.')
@@ -108,7 +145,7 @@ export async function prepareBriefing(
   const guard = await SpendGuard.create(null, call.id)
 
   const [reviews, previousCalls] = await Promise.all([
-    loadReviews(lead.googlePlaceId, guard),
+    loadReviews(lead.googlePlaceId, guard, deadline),
     // Excluding the row just opened: it is this call, not a previous one, and
     // counting it would tell the assistant the operator has rung once more than
     // he has.
@@ -141,9 +178,17 @@ export async function prepareBriefing(
   })
 
   const assistant = getAssistant()
-  // `callId` so a model-backed provider can file its tokens against the attempt
-  // this briefing was written for. See `AssistantContext`.
-  const briefing = await assistant.briefing.generate(input, { signal, callId: call.id })
+  /*
+   * `callId` so a model-backed provider can file its tokens against the attempt
+   * this briefing was written for; `deadline` so it can size its own request
+   * against what is left of the operator's minute rather than against a constant
+   * written when the route allowed thirty seconds. See `AssistantContext`.
+   */
+  const briefing = await assistant.briefing.generate(input, {
+    signal: deadline?.signal,
+    deadline,
+    callId: call.id,
+  })
 
   const stored = await writeBriefing({
     callId: call.id,
