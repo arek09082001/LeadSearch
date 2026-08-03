@@ -156,6 +156,12 @@ conversation and not the first one. Say what happened last time and start from t
 If the diagnosis found nothing, say so and sell on something else — the reviews, the
 history, the reason to ring today. Do not manufacture a fault.
 
+LENGTH IS ENFORCED, NOT REQUESTED. No spoken field — the opening, a detail, an objection or
+its reply, the ask — survives past ${BOUNDS.MAX_SPOKEN} characters: what is kept is the sentences that
+finished before that, and the rest is dropped before he ever sees it. So say it in the one
+or two sentences asked for. A third sentence is not a longer briefing, it is the one he does
+not get.
+
 Every string you return — headline, opening, every label and detail, every objection and
 reply, the ask, every line of avoid — is in German.`
 

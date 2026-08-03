@@ -52,8 +52,25 @@ const MAX_POINTS = 5
 /** More than this is a screen the operator scrolls, which means one he skips. */
 const MAX_OBJECTIONS = 5
 const MAX_AVOID = 5
-/** One line, read at a glance in large type. Generous; a bound, not a target. */
-const MAX_LINE = 240
+/** A caption he READS at a glance in large type: the headline, a point's label. */
+const MAX_CAPTION = 240
+/**
+ * A line he SAYS out loud, or a note written the way one is.
+ *
+ * WHY THIS IS NOT 240 AS WELL. It was, and 240 is the length of a caption rather
+ * than of a sentence somebody speaks. The prompt specifies the opening as three
+ * moves — who he is, the one checkable thing he found, and a question — and
+ * three moves in German do not fit in 240 characters. So what came back was cut
+ * at the character: "…oder hat sich seit der Erstellung einfach niemand meh".
+ * That is not a shorter opening, it is half a sentence he cannot say, and he
+ * finds out which it is with the phone already ringing.
+ *
+ * A BOUND IS STILL WANTED, because what it guards against is real: a model
+ * having a bad day puts a paragraph where a sentence goes, and this card is read
+ * at a glance. Six hundred characters is around four German sentences — well
+ * past the one or two the prompt asks for, well short of a document.
+ */
+const MAX_SPOKEN = 600
 /** Prose, and prose may be a paragraph. The route stores no more than this. */
 const MAX_SUMMARY_BODY = 4_000
 
@@ -62,7 +79,14 @@ export const NONE = ''
 /** "No callback was agreed." Not 0: a call back this afternoon is a real answer. */
 export const NO_FOLLOW_UP = -1
 /** Stated to the model as well as enforced here, so the two agree. */
-export const BOUNDS = { MIN_POINTS, MAX_POINTS, MAX_OBJECTIONS, MAX_AVOID, MAX_TIP_WORDS }
+export const BOUNDS = {
+  MIN_POINTS,
+  MAX_POINTS,
+  MAX_OBJECTIONS,
+  MAX_AVOID,
+  MAX_TIP_WORDS,
+  MAX_SPOKEN,
+}
 
 /* ------------------------------------------------------------------------- *
  * Schemas
@@ -155,16 +179,60 @@ function fail(stage: AssistantError['stage'], what: string): never {
   throw new AssistantError(stage, `The assistant answered in a shape this app cannot use: ${what}.`)
 }
 
-/** A line with something on it, trimmed, bounded. Empty is a failure, not a blank. */
-function line(stage: AssistantError['stage'], value: unknown, field: string): string {
-  const text = typeof value === 'string' ? value.trim() : ''
-  if (!text) fail(stage, `${field} was empty`)
-  return text.slice(0, MAX_LINE)
+/** Where a sentence finished: a terminator, any closing quote, then a break. */
+const SENTENCE_END = /[.!?…]["'»“]?(?=\s|$)/g
+
+/**
+ * Bounded, and never cut in the middle of a sentence.
+ *
+ * THE HALF THAT MATTERS MORE THAN THE NUMBER. Every field this runs on is either
+ * read aloud to a stranger or is a note about what to say to one, and half a
+ * sentence is worse than a missing one: he starts saying it and stops. So an
+ * overrun keeps the sentences that finished inside the bound and drops the rest,
+ * which leaves something he can still say.
+ *
+ * When not even one sentence fits — a model answering in a single very long
+ * clause — it falls back to whole words and marks the cut with an ellipsis. That
+ * is the rule `condense` already applies to a tip, and for its reason: visibly
+ * truncated rather than quietly reworded, so a line that needs rewriting looks
+ * like one instead of reading as a sentence the model chose to end there.
+ */
+function bounded(text: string, max: number): string {
+  if (text.length <= max) return text
+
+  const head = text.slice(0, max)
+
+  let end = 0
+  for (const match of head.matchAll(SENTENCE_END)) {
+    if (match.index !== undefined) end = match.index + match[0].length
+  }
+  if (end > 0) return head.slice(0, end)
+
+  const lastSpace = head.lastIndexOf(' ')
+  return `${(lastSpace > 0 ? head.slice(0, lastSpace) : head).trimEnd()}…`
 }
 
-function optionalLine(value: unknown): string | null {
+/**
+ * A line with something on it, trimmed, bounded. Empty is a failure, not a blank.
+ *
+ * `max` is passed at every call site rather than defaulted, because the whole of
+ * the bug this replaces was one number standing in for two different kinds of
+ * field. A caller has to say which kind it is holding.
+ */
+function line(
+  stage: AssistantError['stage'],
+  value: unknown,
+  field: string,
+  max: number,
+): string {
   const text = typeof value === 'string' ? value.trim() : ''
-  return text === NONE ? null : text.slice(0, MAX_LINE)
+  if (!text) fail(stage, `${field} was empty`)
+  return bounded(text, max)
+}
+
+function optionalLine(value: unknown, max: number): string | null {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text === NONE ? null : bounded(text, max)
 }
 
 function array(stage: AssistantError['stage'], value: unknown, field: string): unknown[] {
@@ -192,10 +260,11 @@ export function readBriefing(value: unknown, origin: Briefing['origin']): Briefi
   const points: BriefingPoint[] = array(stage, raw.points, 'points')
     .map((entry) => {
       const row = (entry ?? {}) as Record<string, unknown>
-      const label = optionalLine(row.label)
-      const detail = optionalLine(row.detail)
+      // The label is a caption for him; the detail is the sentence he says.
+      const label = optionalLine(row.label, MAX_CAPTION)
+      const detail = optionalLine(row.detail, MAX_SPOKEN)
       if (!label || !detail) return null
-      return { label, detail, code: optionalLine(row.code) }
+      return { label, detail, code: optionalLine(row.code, MAX_CAPTION) }
     })
     .filter((point): point is BriefingPoint => point !== null)
     .slice(0, MAX_POINTS)
@@ -205,8 +274,9 @@ export function readBriefing(value: unknown, origin: Briefing['origin']): Briefi
   const objections: BriefingObjection[] = array(stage, raw.objections, 'objections')
     .map((entry) => {
       const row = (entry ?? {}) as Record<string, unknown>
-      const objection = optionalLine(row.objection)
-      const reply = optionalLine(row.reply)
+      // Both spoken: one is their sentence, the other is his answer to it.
+      const objection = optionalLine(row.objection, MAX_SPOKEN)
+      const reply = optionalLine(row.reply, MAX_SPOKEN)
       if (!objection || !reply) return null
       const trigger = typeof row.trigger === 'string' ? row.trigger : NONE
       return {
@@ -220,13 +290,16 @@ export function readBriefing(value: unknown, origin: Briefing['origin']): Briefi
 
   return {
     origin,
-    headline: line(stage, raw.headline, 'headline'),
-    opening: line(stage, raw.opening, 'opening'),
+    // A caption, and then the two things he actually says.
+    headline: line(stage, raw.headline, 'headline', MAX_CAPTION),
+    opening: line(stage, raw.opening, 'opening', MAX_SPOKEN),
     points,
     objections,
-    ask: line(stage, raw.ask, 'ask'),
+    ask: line(stage, raw.ask, 'ask', MAX_SPOKEN),
+    // Notes to him rather than to them, but written as sentences and bounded
+    // as ones: a warning cut in half is a warning he has to guess at.
     avoid: array(stage, raw.avoid, 'avoid')
-      .map((entry) => optionalLine(entry))
+      .map((entry) => optionalLine(entry, MAX_SPOKEN))
       .filter((entry): entry is string => entry !== null)
       .slice(0, MAX_AVOID),
   }
@@ -269,7 +342,7 @@ export function readSummary(value: unknown, origin: CallSummary['origin']): Call
     origin,
     body: body.slice(0, MAX_SUMMARY_BODY),
     suggestedStatus: LEAD_STATUSES.includes(status as LeadStatus) ? (status as LeadStatus) : null,
-    suggestedNextAction: optionalLine(raw.suggestedNextAction),
+    suggestedNextAction: optionalLine(raw.suggestedNextAction, MAX_SPOKEN),
     /*
      * `NO_FOLLOW_UP` is the ordinary answer, and so is anything out of range.
      *
