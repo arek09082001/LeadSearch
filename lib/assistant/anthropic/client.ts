@@ -5,6 +5,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { ASSISTANT_MODELS, type AssistantJob, type AssistantModel } from '@/lib/assistant/anthropic/pricing'
 import { AssistantSpendGuard, estimateInputTokens } from '@/lib/assistant/anthropic/spend'
 import { AssistantError } from '@/lib/assistant/types'
+import type { Deadline } from '@/lib/deadline'
 import { env } from '@/lib/env'
 
 /*
@@ -46,13 +47,21 @@ function client(): Anthropic {
       client: new Anthropic({
         apiKey: key,
         /*
-         * Two rather than the SDK's default of two retries plus a long timeout.
-         * Everything here happens with a phone in somebody's hand: the routes
-         * cap at 30 seconds, and a request still retrying at second 25 has
-         * already lost the moment it was for.
+         * NOTHING IS DECIDED HERE ANY MORE, and that is the fix rather than a
+         * tidy-up. A client-wide 25-second timeout with one retry is a request
+         * that may take fifty seconds, which was longer than the route that made
+         * it was allowed to live — so a briefing that timed out once did not fail,
+         * it went round again and took the whole function down with it, and the
+         * operator read a parse error. Both numbers now come from `attemptFor`,
+         * per request, out of what is actually left of his minute.
+         *
+         * These two are the floor for a caller that handed over no deadline at
+         * all: a node session, a script. Zero retries because the fallback for a
+         * caller who did not say how long he could wait should be to fail once
+         * and say so.
          */
-        maxRetries: 1,
-        timeout: 25_000,
+        maxRetries: 0,
+        timeout: 60_000,
       }),
     }
   }
@@ -81,13 +90,93 @@ const MAX_TOKENS: Record<AssistantJob, number> = {
  * mid-sentence, and reasoning about twelve words would spend the only thing that
  * makes this path worth having. The other two think, because they run once per
  * conversation and are read as prose — but at `medium` rather than higher,
- * because the route gives them thirty seconds and a briefing that arrives after
- * the call has started is not a briefing.
+ * because the route gives them a minute and a briefing that arrives after the
+ * call has started is not a briefing. Medium is what fits in that minute with
+ * room for a second attempt; see `MAX_ATTEMPT_MS`.
  */
 function thinkingFor(job: AssistantJob) {
   return job === 'tip'
     ? ({ type: 'disabled' } as const)
     : ({ type: 'adaptive' } as const)
+}
+
+/* ------------------------------------------------------------------------- *
+ * Time
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The longest one attempt is ever given, per job.
+ *
+ * A ceiling on the attempt rather than the answer: what actually bounds the wait
+ * is the caller's deadline, and these exist so that a job with room for two
+ * chances spends it on two rather than on one very patient one. Ten seconds is
+ * already several times what Haiku needs with thinking off, and the point of the
+ * number is the other end of it: a stalled tip is abandoned and retried while the
+ * sentence it was about is still being spoken.
+ */
+const MAX_ATTEMPT_MS: Record<AssistantJob, number> = {
+  tip: 10_000,
+  briefing: 45_000,
+  summary: 45_000,
+}
+
+/**
+ * What is left over for the work either side of the request.
+ *
+ * The ledger row is written after the answer arrives and the caller still has a
+ * row of its own to write — `call_briefings`, `call_summaries` — before anything
+ * reaches the screen. An attempt allowed to run to the last millisecond of the
+ * deadline would be an attempt that succeeded into a request that had already
+ * run out of time to say so.
+ */
+const RESERVE_MS = 3_000
+
+/**
+ * Below this there is no point sending anything.
+ *
+ * A request opened with four seconds left is billed in full and read by nobody,
+ * because the deadline cuts it off mid-generation. Refusing early costs the
+ * operator the same briefing and not the money, and it gives him a sentence
+ * naming what happened rather than a spinner that ends in a gateway page.
+ */
+const MIN_ATTEMPT_MS = 5_000
+
+/**
+ * The end of every sentence about time.
+ *
+ * Said because it is the only thing the operator can do about it, and because a
+ * timeout leaves no row: unlike a refusal, which is an answer, this is a request
+ * that did not happen and pressing again is a reasonable response to it.
+ */
+const WAITED = 'Nothing was written. Try again.'
+
+/**
+ * How long this attempt gets, and whether a second one fits inside the deadline.
+ *
+ * THE RETRY IS CONDITIONAL AND THAT IS THE POINT. A retry is worth having — a
+ * 429 or a 500 on the first try is ordinary and a second attempt usually works —
+ * but only when there is room for it. A retry that cannot finish before the
+ * caller stops waiting does not rescue the request, it guarantees the request
+ * dies at the platform's hand instead of this one's.
+ */
+function attemptFor(
+  job: AssistantJob,
+  stage: AssistantError['stage'],
+  deadline: Deadline | undefined,
+): { timeout: number; maxRetries: number } {
+  const ceiling = MAX_ATTEMPT_MS[job]
+  if (!deadline) return { timeout: ceiling, maxRetries: 1 }
+
+  const remaining = deadline.remainingMs() - RESERVE_MS
+  if (remaining < MIN_ATTEMPT_MS) {
+    throw new AssistantError(
+      stage,
+      'There was not enough time left to ask the assistant. Nothing was sent. Try again.',
+    )
+  }
+
+  const timeout = Math.min(remaining, ceiling)
+  return { timeout, maxRetries: remaining >= timeout * 2 ? 1 : 0 }
 }
 
 interface Ask {
@@ -100,6 +189,8 @@ interface Ask {
   /** The call this spend belongs to, so the ledger can answer "what did that call cost". */
   callId: string | null
   signal?: AbortSignal
+  /** What is left of the caller's patience. See `attemptFor`. */
+  deadline?: Deadline
 }
 
 /**
@@ -117,9 +208,14 @@ export async function ask({
   schema,
   callId,
   signal,
+  deadline,
 }: Ask): Promise<unknown> {
   const model: AssistantModel = ASSISTANT_MODELS[job]
   const maxTokens = MAX_TOKENS[job]
+
+  // Before the ledger is read, because reading it is itself two round trips and
+  // there is no sense spending them on a request there is no time to make.
+  const attempt = attemptFor(job, stage, deadline)
 
   const guard = await AssistantSpendGuard.create(callId)
   // Before the request. A ceiling enforced afterwards is a receipt.
@@ -150,9 +246,25 @@ export async function ask({
         },
         messages: [{ role: 'user', content: prompt }],
       },
-      { signal },
+      { signal, timeout: attempt.timeout, maxRetries: attempt.maxRetries },
     )
   } catch (error) {
+    /*
+     * Out of time is not "could not be reached", and the operator is owed the
+     * difference: one of them means try again, the other means something is
+     * wrong. Checked before the SDK's own classes because an abort arrives as an
+     * `APIUserAbortError` and a timeout as an `APIConnectionTimeoutError`, and
+     * both of those would otherwise be reported as a network that failed.
+     */
+    if (deadline?.expired) {
+      throw new AssistantError(stage, `The assistant did not answer in time. ${WAITED}`)
+    }
+    if (error instanceof Anthropic.APIConnectionTimeoutError) {
+      throw new AssistantError(
+        stage,
+        `The assistant did not answer within ${Math.round(attempt.timeout / 1000)} seconds. ${WAITED}`,
+      )
+    }
     if (error instanceof Anthropic.APIError) {
       throw new AssistantError(stage, `The assistant could not be reached: ${error.message}`, error.status)
     }

@@ -88,6 +88,7 @@ export class AnthropicBriefingProvider implements BriefingProvider {
       schema: briefingSchema(input.findings.map((finding) => finding.code)),
       callId: ctx?.callId ?? null,
       signal: ctx?.signal,
+      deadline: ctx?.deadline,
     })
 
     return readBriefing(answer, origin('briefing'))
@@ -109,6 +110,7 @@ export class AnthropicTipProvider implements TipProvider {
       // The one job that always knows which call it belongs to.
       callId: ctx?.callId ?? context.callId,
       signal: ctx?.signal,
+      deadline: ctx?.deadline,
     })
 
     // Null travels back as null. It is the ordinary answer and the surface
@@ -135,6 +137,7 @@ export class AnthropicSummaryProvider implements SummaryProvider {
       schema: SUMMARY_SCHEMA,
       callId: ctx?.callId ?? null,
       signal: ctx?.signal,
+      deadline: ctx?.deadline,
     })
 
     return readSummary(answer, origin('summary'))

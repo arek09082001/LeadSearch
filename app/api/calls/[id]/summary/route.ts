@@ -1,6 +1,7 @@
 import { errorResponse, readJson, requireSession } from '@/lib/api/guard'
 import { markSummaryAccepted, readCall, readLatestSummary, stampHandover } from '@/lib/assistant/store'
 import { summariseCall, summariseCallOnce } from '@/lib/assistant/summarise'
+import { Deadline } from '@/lib/deadline'
 import { LEAD_STATUSES, type LeadStatus } from '@/lib/leads/types'
 
 /*
@@ -39,10 +40,19 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 /*
  * Long enough for one generation and no longer. The operator has just hung up
- * and is looking at the screen; a request still running after half a minute has
- * lost him, and the transcript is safely stored either way.
+ * and is looking at the screen; a request still running after a minute has lost
+ * him, and the transcript is safely stored either way.
+ *
+ * The same generation the briefing route makes, by the same model with the same
+ * thinking on — so it had the same defect and gets the same fix: half a minute
+ * was not reliably enough for it, and a request that ran over was killed by the
+ * platform rather than answered. `BUDGET_MS` holds the work a few seconds inside
+ * the limit so that running out of time arrives as a sentence.
  */
-export const maxDuration = 30
+export const maxDuration = 60
+
+/** What the work gets, out of the sixty. The rest is writing the row and the reply. */
+const BUDGET_MS = 55_000
 
 type Context = { params: Promise<{ id: string }> }
 
@@ -58,6 +68,8 @@ type Context = { params: Promise<{ id: string }> }
 const MAX_BODY = 4_000
 
 export async function POST(request: Request, { params }: Context) {
+  const deadline = Deadline.in(BUDGET_MS, 'Writing up the call')
+
   try {
     await requireSession()
     const { id } = await params
@@ -73,8 +85,12 @@ export async function POST(request: Request, { params }: Context) {
      * on purpose, and this is the flag that spends that allowance.
      */
     const body = (await readJson(request).catch(() => ({}))) as { regenerate?: unknown }
-    const result =
-      body.regenerate === true ? await summariseCall(id) : await summariseCallOnce(id)
+    // Raced for the reason the prepare route races: a leg that does not honour
+    // the signal must not be able to hold the response past the deadline.
+    const result = await Promise.race([
+      body.regenerate === true ? summariseCall(id, deadline) : summariseCallOnce(id, deadline),
+      deadline.rejected(),
+    ])
 
     if (!result.summary) {
       // Not an error. There is no transcript to write up, the route says which
@@ -88,6 +104,8 @@ export async function POST(request: Request, { params }: Context) {
     })
   } catch (error) {
     return errorResponse(error)
+  } finally {
+    deadline.release()
   }
 }
 
