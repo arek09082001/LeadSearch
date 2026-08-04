@@ -698,14 +698,41 @@ function snapshotFrom(candidate: SaveRequest['candidates'][number]) {
  * second-to-last part, minus a postal code. Deliberately crude: this feeds a
  * filter dropdown, and a wrong guess costs one odd entry in a list, not a
  * wrong record. `addressComponents` would be exact but is a billed field.
+ *
+ * Exported because `search_places` names the city in what it reports back, and
+ * a second implementation of this guess would eventually disagree with the one
+ * that wrote the column.
  */
-function cityFrom(address: string | null | undefined): string | null {
+export function cityFrom(address: string | null | undefined): string | null {
   if (!address) return null
   const parts = address.split(',').map((part) => part.trim()).filter(Boolean)
   if (parts.length < 2) return null
   const candidate = parts[parts.length - 2]
   const withoutPostcode = candidate.replace(/^\d{4,6}\s+/, '').trim()
   return withoutPostcode || null
+}
+
+/**
+ * A brand-new lead's row: the Google snapshot, plus the owner columns that only
+ * an insert may set.
+ *
+ * `lead_type` and `weakness_signals` are in here rather than in `snapshotFrom`
+ * on purpose. The snapshot is refreshed on every re-save; these two are the
+ * account of why the lead was first kept, and rewriting that on a re-save would
+ * be the same destruction as resetting its status — see the note in `saveLeads`.
+ * Both fall back to the column defaults, which say `manual` and `{}`.
+ */
+function insertRowFor(candidate: SaveRequest['candidates'][number], searchId: string | null) {
+  return {
+    google_place_id: candidate.googlePlaceId,
+    ...snapshotFrom(candidate),
+    status: 'new' as const,
+    discovered_via_search_id: searchId,
+    enrichment_state: 'queued' as const,
+    enrichment_queued_at: new Date().toISOString(),
+    lead_type: candidate.leadType ?? 'manual',
+    weakness_signals: candidate.weaknessSignals ?? [],
+  }
 }
 
 export async function saveLeads(request: SaveRequest): Promise<SaveResult> {
@@ -746,14 +773,7 @@ export async function saveLeads(request: SaveRequest): Promise<SaveResult> {
   const toUpdate = candidates.filter((candidate) => existing.has(candidate.googlePlaceId))
 
   if (toInsert.length) {
-    const payload = toInsert.map((candidate) => ({
-      google_place_id: candidate.googlePlaceId,
-      ...snapshotFrom(candidate),
-      status: 'new' as const,
-      discovered_via_search_id: request.searchId ?? null,
-      enrichment_state: 'queued' as const,
-      enrichment_queued_at: new Date().toISOString(),
-    }))
+    const payload = toInsert.map((candidate) => insertRowFor(candidate, request.searchId ?? null))
 
     const { data, error } = await supabase.from('leads').insert(payload).select('id, google_place_id')
 
@@ -763,14 +783,7 @@ export async function saveLeads(request: SaveRequest): Promise<SaveResult> {
       for (const candidate of toInsert) {
         const single = await supabase
           .from('leads')
-          .insert({
-            google_place_id: candidate.googlePlaceId,
-            ...snapshotFrom(candidate),
-            status: 'new' as const,
-            discovered_via_search_id: request.searchId ?? null,
-            enrichment_state: 'queued' as const,
-            enrichment_queued_at: new Date().toISOString(),
-          })
+          .insert(insertRowFor(candidate, request.searchId ?? null))
           .select('id')
           .single()
 

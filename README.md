@@ -133,6 +133,83 @@ Read what the mock would say, without running the app:
 node scripts/assistant-demo.mjs
 ```
 
+### 7. The MCP endpoint
+
+`MCP_TOKEN` is the bearer token for `/api/mcp`, which exposes the product as two tools an
+assistant can call. Generate one the same way as `CRON_SECRET`, then point a client at it:
+
+```json
+{
+  "url": "https://<your-deployment>/api/mcp",
+  "headers": { "Authorization": "Bearer <MCP_TOKEN>" }
+}
+```
+
+Unset, the route refuses everyone — including you. It is the only lock on the door, because
+an MCP client is a program and has no session to present.
+
+---
+
+## The two tools
+
+**`search_places`** searches Google and *saves what it decides is worth keeping*. It is not
+a read-only search, and that is the one thing to know before calling it.
+
+Each result goes through a fixed rule, ordered so that nothing expensive is spent on a
+business something free would have rejected:
+
+| Step | Question | Cost |
+| ---- | -------- | ---- |
+| 1 | Already a lead, or already rejected once? | one index lookup |
+| 2 | Operational, contactable, ≥ 5 ratings, ≥ 3.5 stars? | free |
+| 3 | No website at all? → **saved as `no_website`** | free |
+| 4 | Website, and clears `minReviewCount` / `minRating`? | free |
+| 5 | Fetch the site. Any fault? → **saved as `weak_website`** | 8s, one request |
+
+A fault is any of: unreachable, an error status, no HTTPS, a certificate that will not
+verify, no mobile viewport, a builder subdomain or social profile instead of a real domain,
+a builder footer, or a copyright year more than three years old. They come back in
+`weaknessSignals`, in the same vocabulary `lead_audit_findings` uses — so a lead saved for
+`no_https` still says `no_https` once the full audit has confirmed it.
+
+Everything else is discarded, and its place ID is remembered in `skipped_places` so the next
+search does not pay to examine it again. The answer lists saved leads one by one and
+discarded ones only as counts, because fifty-four rejected businesses read back into a
+conversation is a token bill with nothing to show for it.
+
+Three parameters are worth knowing: `autoSave: false` runs the whole rule and writes
+nothing; `minReviewCount` / `minRating` move the bar for spending a request on a website;
+`includeNoWebsiteOnly: true` skips website checking entirely.
+
+**`save_leads`** is the appeal. Give it place IDs and it saves them as `manual` and removes
+them from `skipped_places` — without that second half, the rule's rejection would outlive
+the operator's overruling of it. The data comes from this app's own cached search results,
+so a place ID whose cache has expired comes back in `notFound` rather than costing a fresh
+Google call.
+
+### What it is allowed to spend
+
+Two budgets, and only one of them is money.
+
+- **Google requests** are billed and bounded by `monthly_ceiling_usd`, like every other
+  billable call in the product. They land in `api_usage`.
+- **Website fetches** cost nothing and are bounded anyway, by
+  `app_settings.mcp_site_check_daily_limit` (50 a day). They are unattended requests to
+  small businesses' servers made in your name, which is a budget even when it is free.
+  They are counted in `mcp_call_log`, and the day's total is summed from there rather than
+  held in memory — a serverless process is not somewhere a ceiling can live.
+
+Both are reported in every answer as `quotaUsed`. Checks that do not fit inside the
+request's deadline are reported as undecided and left for the next call; they are never
+written to `skipped_places`, because nobody looked at them.
+
+Read what the website check makes of a real site, without running the app:
+
+```bash
+node scripts/site-check-demo.mjs
+node scripts/site-check-demo.mjs example.de wixsite.com
+```
+
 ---
 
 ## Migrations
@@ -246,6 +323,8 @@ lib/
   scoring/        pure arithmetic over stored findings, plus its config
   refresh/        asking Google what has changed, and what that means
   leads/          the library: filters, CSV, dates, the repository
+  mcp/            the two tools, the storage rule, and what it remembers
+  services/       site-check: the cheap pre-save website check. No server-only imports
 ```
 
 Four background passes, all of them drained in slices bounded by the serverless function's
@@ -270,6 +349,7 @@ npx tsc --noEmit # typecheck
 
 node scripts/build-schema.mjs      # regenerate supabase/schema.sql from the migrations
 node scripts/assistant-demo.mjs    # read what the mock assistant would say, three calls
+node scripts/site-check-demo.mjs   # point the pre-save website check at real sites
 ```
 
 ---

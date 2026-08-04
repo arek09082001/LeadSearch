@@ -380,6 +380,23 @@ export interface SaveCandidate {
   raw?: unknown
   /** When this Google data was fetched. Carried through to leads.fetched_at. */
   fetchedAt?: string
+  /**
+   * Why this business is being saved, when something other than a person decided.
+   *
+   * Set by `search_places`, which saves unattended and therefore owes the row an
+   * account of itself. Omitted everywhere else, and the column defaults to
+   * `manual` — the honest answer for a save the operator made by hand.
+   *
+   * Applied on INSERT only. Re-saving a lead must not rewrite why it was first
+   * kept, for the same reason re-saving must not reset its status: that is the
+   * work product this table exists to protect.
+   */
+  leadType?: 'no_website' | 'weak_website' | 'manual'
+  /**
+   * The faults that justified saving it, as `FindingCode` strings. Only ever
+   * populated alongside `leadType: 'weak_website'`.
+   */
+  weaknessSignals?: string[]
 }
 
 export interface SaveRequest {

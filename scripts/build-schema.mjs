@@ -71,8 +71,8 @@ const HEADER = `-- ${'='.repeat(77)}
 --   Permanent side   leads, lead_audits, lead_audit_findings, lead_scores,
 --                    lead_notes, lead_activities, lead_refreshes, calls,
 --                    call_briefings, call_tips, call_summaries,
---                    lists, lead_lists, saved_views
---   Cost control     api_usage, app_settings, geocode_cache
+--                    lists, lead_lists, saved_views, skipped_places
+--   Cost control     api_usage, app_settings, geocode_cache, mcp_call_log
 --   Read models      leads_library, lead_score_queue, lead_scoring_inputs,
 --                    lead_facet_values, lead_status_counts, lead_list_counts,
 --                    scheduled_jobs
