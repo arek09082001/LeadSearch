@@ -176,6 +176,21 @@ export interface QuotaUsed {
 export interface SearchPlacesResult {
   saved: SavedLead[]
   skipped: SkippedSummary
+  /**
+   * The day's website-check allowance stopped this run short.
+   *
+   * Always present, never optional, and that is the point of it. `saved: []` is
+   * the same shape whether the market was already worked or the allowance ran
+   * out at the third business — and the second is a run to repeat tomorrow while
+   * the first is one never to repeat at all. An optional field would have the
+   * caller reading its absence as false, which is true and is also exactly how
+   * a field gets forgotten.
+   *
+   * False when the clock rather than the allowance cut the checks short: that is
+   * the platform's sixty seconds, it says "call again now", and it has its own
+   * sentence in `notice`.
+   */
+  limitReached: boolean
   quotaUsed: QuotaUsed
   /**
    * Present only when the run was cut short or nothing was written.
