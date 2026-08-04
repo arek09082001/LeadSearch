@@ -4,6 +4,7 @@ import type { Deadline } from '@/lib/deadline'
 import { cityFrom, saveLeads } from '@/lib/leads/repository'
 import type { SaveCandidate } from '@/lib/leads/types'
 import { queueAudit } from '@/lib/mcp/enrich'
+import { bulkUpdateLeads } from '@/lib/mcp/leads'
 import {
   logMcpCall,
   readKnownPlaceIds,
@@ -78,6 +79,22 @@ export interface SearchPlacesInput {
    * checks and finds no `weak_website` leads.
    */
   includeNoWebsiteOnly?: boolean
+
+  /**
+   * A follow-up day written onto every lead this run saves.
+   *
+   * Already resolved to `2026-08-14` by the tool boundary — see
+   * `lib/mcp/follow-up.ts`. It exists because the alternative is a second round
+   * trip: search a town, read back the ids, call `bulk_update_leads` with all of
+   * them. That is two tool calls to express one intention ("work these on
+   * Thursday"), and the list of ids between them is a thing to get wrong.
+   *
+   * It never REPLACES a date. A lead already in the book is not saved by this
+   * run and is not touched by this field.
+   */
+  followUpAt?: string
+  /** One note, written onto every lead this run saves. Same argument as above. */
+  note?: string
 }
 
 /** A place that survived the free filters and has a website to fetch. */
@@ -296,6 +313,31 @@ export async function searchPlaces(
     reject(row.providerPlaceId, 'quotaReached')
   }
 
+  /*
+   * The day's allowance stopped this run short.
+   *
+   * A FLAG RATHER THAN A SHORTER LIST, and that is the whole point of it. Cut
+   * off at the allowance, this run returns fewer saved leads than the same
+   * search would have returned an hour earlier — and `saved: []` reads exactly
+   * like a market that has already been worked. The counts under
+   * `skipped.byReason.quotaReached` have always said so, but they say it in a
+   * place a caller has to think to look; a boolean at the top level is something
+   * it can branch on.
+   *
+   * Deliberately NOT set by the deadline running out. That is the platform's
+   * sixty seconds rather than the operator's allowance: it means "come back now
+   * and the rest will be checked", where this one means "come back tomorrow".
+   * The two have their own sentences in `notices` for the same reason.
+   */
+  const limitReached = preselected.length > affordable.length
+  if (limitReached) {
+    notices.push(
+      `The daily website-check allowance ran out: ${preselected.length - affordable.length} ` +
+        'business(es) were left unchecked and unremembered, and will be examined by the next ' +
+        "search. Raise app_settings.mcp_site_check_daily_limit if this is happening every day.",
+    )
+  }
+
   const checks = await checkSites(
     affordable.map((candidate) => candidate.website),
     { signal: deadline?.signal },
@@ -339,7 +381,14 @@ export async function searchPlaces(
 
   if (autoSave) {
     if (toSave.length) {
-      const result = await saveLeads({ candidates: toSave, searchId })
+      // The note goes through `saveLeads`' own note path — the one `save_leads`
+      // already uses — rather than being applied afterwards. One mechanism for
+      // "a note on everything this call saved", shared by both tools.
+      const result = await saveLeads({
+        candidates: toSave,
+        searchId,
+        note: input.note?.trim() || null,
+      })
       /*
        * A failed insert must not be reported as a saved lead. The tool's answer
        * is the only account of this run anybody will read, and an assistant told
@@ -357,18 +406,53 @@ export async function searchPlaces(
         )
       }
 
-      queueAudit(
-        result.items
-          .filter((item) => item.leadId && item.outcome !== 'failed')
-          .map((item) => item.leadId!),
-      )
+      const savedIds = result.items
+        .filter((item) => item.leadId && item.outcome !== 'failed')
+        .map((item) => item.leadId!)
+
+      /*
+       * The follow-up date, onto exactly what was written.
+       *
+       * After `saveLeads` rather than as another field on its candidate shape,
+       * and that is not squeamishness about the insert. `saveLeads` is the ONE
+       * path that creates a lead and it is shared with the browser's save
+       * button; a follow-up date belongs to the caller that asked for these
+       * leads, not to the act of creating one. `bulk_update_leads` is already
+       * the tool for "set a date on these ids", so this is that, called
+       * directly.
+       *
+       * `savedIds` and not `toSave`: a lead whose insert failed is not given a
+       * callback date, for the same reason it is not reported as saved.
+       *
+       * A failure is a notice rather than an exception. The leads exist and are
+       * listed in the answer; throwing here would report a failed search that
+       * had in fact written every row, and the obvious response — running it
+       * again — would cost another set of Places calls to save nothing.
+       */
+      if (savedIds.length && input.followUpAt) {
+        try {
+          const applied = await bulkUpdateLeads(savedIds, { followUpAt: input.followUpAt })
+          if (applied.notice) notices.push(applied.notice)
+        } catch (error) {
+          notices.push(
+            `The leads were saved, but the follow-up date could not be written: ${
+              error instanceof Error ? error.message : 'unknown error'
+            }`,
+          )
+        }
+      }
+
+      queueAudit(savedIds)
     }
 
     await rememberSkipped(skipped.filter((entry) => isRemembered(entry.reason)))
   } else {
     notices.push(
       `autoSave is off: nothing was written, and nothing was remembered as rejected. ` +
-        `The ${saved.length} lead(s) listed are what would have been saved.`,
+        `The ${saved.length} lead(s) listed are what would have been saved.` +
+        (input.followUpAt || input.note?.trim()
+          ? ' followUpAt and note were not applied either — there is nothing to apply them to.'
+          : ''),
     )
   }
 
@@ -389,6 +473,7 @@ export async function searchPlaces(
   return {
     saved,
     skipped: countByReason(skipped.map((entry) => entry.reason)),
+    limitReached,
     quotaUsed: {
       placesCalls,
       siteChecks,

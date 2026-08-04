@@ -168,8 +168,16 @@ export async function readSiteCheckAllowance(): Promise<SiteCheckAllowance> {
  * The log
  * ------------------------------------------------------------------------- */
 
+/**
+ * The tools that write, and only those.
+ *
+ * `list_leads` is missing on purpose. This ledger answers "what did the
+ * assistant spend, and what did it decide" — a read does neither, and logging
+ * one would put a row here per page of a paginated list, inflating the table
+ * that `readSiteCheckAllowance` sums over the day to enforce the allowance.
+ */
 export interface McpCallRecord {
-  tool: 'search_places' | 'save_leads'
+  tool: 'search_places' | 'save_leads' | 'update_lead' | 'bulk_update_leads'
   params: unknown
   savedCount: number
   skippedCount: number

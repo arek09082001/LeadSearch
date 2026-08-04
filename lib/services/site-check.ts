@@ -8,9 +8,9 @@ import { type FindingCode } from '@/lib/enrichment/vocabulary'
  * already decided to keep: it opens a TLS socket for the certificate's expiry
  * date, resolves the domain separately to tell a dead registration from a dead
  * server, probes /favicon.ico, and takes as long as it takes. This runs on a
- * business nobody has decided anything about yet, fifty times in a row, to
+ * business nobody has decided anything about yet, hundreds of times in a row, to
  * answer one question — is there anything here worth saving? One request, eight
- * seconds, then a verdict.
+ * seconds, one retry if the connection itself failed, then a verdict.
  *
  * So it is a cheaper instrument pointed at the same faults, and it reports them
  * in the same words: the signals below are `FindingCode` values from
@@ -36,6 +36,41 @@ import { type FindingCode } from '@/lib/enrichment/vocabulary'
 
 /** One request, start to finish. The spec's eight seconds. */
 const TIMEOUT_MS = 8_000
+
+/**
+ * One more go, and only ever one.
+ *
+ * A refused connection is not always an answer about the business. A DNS
+ * resolver that blinks, a TCP reset, a serverless instance that has just come up
+ * cold — all of them arrive here as the same `TypeError: fetch failed` that a
+ * genuinely dead server produces, and the consequence of believing the transient
+ * one is a lead saved for `site_unreachable` against a business whose website is
+ * fine. That is the expensive mistake in this whole check: it is written to
+ * `weakness_signals`, it is what the operator reads before he rings, and nothing
+ * about the row says the verdict came from a single failed connection.
+ *
+ * ONE retry, not three, because the second failure is evidence and the fourth is
+ * just cost. And it is worth stating what is NOT retried, since both are
+ * failures this would otherwise double the price of:
+ *
+ *   A certificate fault      is a determinate answer. The server is there and
+ *                            answering; what it presents will not verify, and it
+ *                            will not verify the second time either.
+ *   A timeout                is already eight seconds spent. Retrying takes one
+ *                            business to sixteen, and at a concurrency of five
+ *                            that is a whole worker held on the one result the
+ *                            run is least likely to want. A site that cannot
+ *                            answer in eight seconds has told us something true.
+ */
+const RETRIES = 1
+
+/**
+ * Long enough for a blip to pass, short enough to be invisible.
+ *
+ * Retrying instantly would hit the same half-second of whatever went wrong; a
+ * full second would show up in the deadline arithmetic across a batch of fifty.
+ */
+const RETRY_DELAY_MS = 300
 
 /**
  * Never more than this many sites in flight.
@@ -367,9 +402,11 @@ export const USER_AGENT = 'LeadEngineTriage/1 (+internal prospecting tool)'
  * on: fifty of these run concurrently and a rejection anywhere would take the
  * whole run down over one business with a typo in its Google listing.
  */
-export async function checkSite(url: string): Promise<SiteCheckResult> {
+export async function checkSite(
+  url: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<SiteCheckResult> {
   const started = Date.now()
-  const signals = new Set<WeaknessSignal>()
 
   const target = normalizeUrl(url)
   if (!target) {
@@ -392,119 +429,157 @@ export async function checkSite(url: string): Promise<SiteCheckResult> {
    * it will pass every markup test, and none of that changes the fact that the
    * business has no website. Fetching it would cost eight seconds to learn what
    * the hostname already said.
+   *
+   * Computed once and copied per attempt. These are facts about the URL rather
+   * than about any particular request, so a retry must start from them — and
+   * must not start from whatever the failed attempt had accumulated on top.
    */
+  const address = new Set<WeaknessSignal>()
   const addressSignal = hostSignal(target)
-  if (addressSignal) signals.add(addressSignal)
-  if (target.protocol === 'http:') signals.add('no_https')
+  if (addressSignal) address.add(addressSignal)
+  if (target.protocol === 'http:') address.add('no_https')
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  let lastError: unknown = null
+  let timedOut = false
 
-  try {
-    /*
-     * A GET, not a HEAD. Three of the five things the rule asks about are in
-     * the markup — the viewport tag, the builder footer, the copyright year —
-     * and a HEAD would answer none of them, so the second request it saves is a
-     * request it would immediately have to make again. `readCapped` is what
-     * keeps this lean: the headers and the first 256KB, then the socket closes.
-     */
-    const response = await fetch(target, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml',
-        // Compressed markup is most of the saving on a page like this.
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'de,en;q=0.8',
-      },
-    })
+  for (let attempt = 0; attempt <= RETRIES; attempt += 1) {
+    const signals = new Set(address)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
 
-    const finalUrl = new URL(response.url || target.href)
+    try {
+      /*
+       * A GET, not a HEAD. Three of the five things the rule asks about are in
+       * the markup — the viewport tag, the builder footer, the copyright year —
+       * and a HEAD would answer none of them, so the second request it saves is a
+       * request it would immediately have to make again. `readCapped` is what
+       * keeps this lean: the headers and the first 256KB, then the socket closes.
+       */
+      const response = await fetch(target, {
+        method: 'GET',
+        redirect: 'follow',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': USER_AGENT,
+          Accept: 'text/html,application/xhtml+xml',
+          // Compressed markup is most of the saving on a page like this.
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Accept-Language': 'de,en;q=0.8',
+        },
+      })
 
-    // Re-judge on the destination: a domain that redirects to a Facebook page
-    // has one, and the redirect is the proof.
-    const finalSignal = hostSignal(finalUrl)
-    if (finalSignal) signals.add(finalSignal)
-    // Including a redirect that lands on plaintext, which the first check could
-    // not have seen — the operator typed https and got http.
-    if (finalUrl.protocol === 'http:') signals.add('no_https')
+      const finalUrl = new URL(response.url || target.href)
 
-    if (!response.ok) {
-      signals.add('http_error')
+      // Re-judge on the destination: a domain that redirects to a Facebook page
+      // has one, and the redirect is the proof.
+      const finalSignal = hostSignal(finalUrl)
+      if (finalSignal) signals.add(finalSignal)
+      // Including a redirect that lands on plaintext, which the first check could
+      // not have seen — the operator typed https and got http.
+      if (finalUrl.protocol === 'http:') signals.add('no_https')
+
+      if (!response.ok) {
+        /*
+         * NOT retried, and this is the one that looks like it should be. A 503
+         * is a server that answered — it resolved, it connected, it chose to say
+         * no — and `http_error` is a true statement about a visitor's experience
+         * of that site today. Retrying would also double the cost of the one
+         * failure mode a rate limiter produces, which is the last thing to
+         * respond to by asking again.
+         */
+        signals.add('http_error')
+        return {
+          url,
+          requestedUrl: target.href,
+          finalUrl: finalUrl.href,
+          reachable: false,
+          httpStatus: response.status,
+          durationMs: Date.now() - started,
+          signals: ordered(signals),
+          error: `The server answered ${response.status}.`,
+        }
+      }
+
+      const html = await readCapped(response)
+
+      if (!isMobileFriendly(html)) signals.add('not_mobile_friendly')
+
+      if (matchesAny(BUILDER_FOOTER_PATTERNS, tailOf(html))) signals.add('diy_platform')
+
+      const year = detectCopyrightYear(html)
+      if (year !== null && new Date().getFullYear() - year > STALE_COPYRIGHT_YEARS) {
+        signals.add('stale_copyright')
+      }
+
       return {
         url,
         requestedUrl: target.href,
         finalUrl: finalUrl.href,
-        reachable: false,
+        reachable: true,
         httpStatus: response.status,
         durationMs: Date.now() - started,
         signals: ordered(signals),
-        error: `The server answered ${response.status}.`,
+        error: null,
       }
-    }
+    } catch (error) {
+      lastError = error
 
-    const html = await readCapped(response)
-
-    if (!isMobileFriendly(html)) signals.add('not_mobile_friendly')
-
-    if (matchesAny(BUILDER_FOOTER_PATTERNS, tailOf(html))) signals.add('diy_platform')
-
-    const year = detectCopyrightYear(html)
-    if (year !== null && new Date().getFullYear() - year > STALE_COPYRIGHT_YEARS) {
-      signals.add('stale_copyright')
-    }
-
-    return {
-      url,
-      requestedUrl: target.href,
-      finalUrl: finalUrl.href,
-      reachable: true,
-      httpStatus: response.status,
-      durationMs: Date.now() - started,
-      signals: ordered(signals),
-      error: null,
-    }
-  } catch (error) {
-    /*
-     * A bad certificate is not an unreachable site, and conflating them would
-     * lose the better of the two conversations. The server is there and
-     * answering; what it presents will not verify, which every visitor's
-     * browser has been shouting at them in red for however long it has been
-     * expired. `site_unreachable` is not added: nothing about this says the
-     * business has no server.
-     */
-    const cert = certificateFault(error)
-    if (cert) {
-      signals.add('invalid_certificate')
-      return {
-        url,
-        requestedUrl: target.href,
-        finalUrl: null,
-        reachable: false,
-        httpStatus: null,
-        durationMs: Date.now() - started,
-        signals: ordered(signals),
-        error: `The certificate does not verify (${cert}).`,
+      /*
+       * A bad certificate is not an unreachable site, and conflating them would
+       * lose the better of the two conversations. The server is there and
+       * answering; what it presents will not verify, which every visitor's
+       * browser has been shouting at them in red for however long it has been
+       * expired. `site_unreachable` is not added: nothing about this says the
+       * business has no server.
+       */
+      const cert = certificateFault(error)
+      if (cert) {
+        signals.add('invalid_certificate')
+        return {
+          url,
+          requestedUrl: target.href,
+          finalUrl: null,
+          reachable: false,
+          httpStatus: null,
+          durationMs: Date.now() - started,
+          signals: ordered(signals),
+          error: `The certificate does not verify (${cert}).`,
+        }
       }
+
+      timedOut = controller.signal.aborted
+      // Eight seconds is an answer. See the note on RETRIES.
+      if (timedOut) break
+      /*
+       * The batch is already over. The pool's contract is that an in-flight
+       * request finishes rather than being cut off, and a retry is not in
+       * flight — it is new work, started after the caller said stop, against a
+       * deadline the response has to be written inside.
+       */
+      if (options.signal?.aborted) break
+    } finally {
+      clearTimeout(timer)
     }
 
-    signals.add('site_unreachable')
-    const timedOut = controller.signal.aborted
-    return {
-      url,
-      requestedUrl: target.href,
-      finalUrl: null,
-      reachable: false,
-      httpStatus: null,
-      durationMs: Date.now() - started,
-      signals: ordered(signals),
-      error: timedOut ? `No answer within ${TIMEOUT_MS / 1000}s.` : messageOf(error),
-    }
-  } finally {
-    clearTimeout(timer)
+    if (attempt < RETRIES) await delay(RETRY_DELAY_MS)
   }
+
+  const signals = new Set(address)
+  signals.add('site_unreachable')
+  return {
+    url,
+    requestedUrl: target.href,
+    finalUrl: null,
+    reachable: false,
+    httpStatus: null,
+    durationMs: Date.now() - started,
+    signals: ordered(signals),
+    error: timedOut ? `No answer within ${TIMEOUT_MS / 1000}s.` : messageOf(lastError),
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -565,7 +640,11 @@ export async function checkSites(
       if (index >= urls.length) return
       // `checkSite` does not throw, so nothing here needs a catch — and if that
       // ever stops being true, the pool must not be the thing that discovers it.
-      results[index] = await checkSite(urls[index])
+      //
+      // The signal goes down as well as being read up here. It never cancels the
+      // request in flight — that is the contract below — but it does stop a
+      // failed one being tried a second time after the batch is over.
+      results[index] = await checkSite(urls[index], { signal: options.signal })
     }
   }
 
