@@ -84,6 +84,28 @@ export function requireSchedule(request: Request): void {
 }
 
 /**
+ * The MCP client, and nothing else.
+ *
+ * Fails closed on a missing `MCP_TOKEN`, for the reason `requireSchedule` does
+ * and then some. The two tools behind this door spend money against Google,
+ * write to the permanent leads library, and fetch other people's websites from
+ * this server's address — all unattended. An unset variable must never become
+ * an open endpoint that does any of that, so no token means no MCP.
+ *
+ * A session is deliberately NOT accepted as an alternative. This route speaks
+ * JSON-RPC to a program, not HTML to a browser; a cookie reaching it would mean
+ * something has gone wrong rather than that the operator is here.
+ */
+export function requireMcpClient(request: Request): void {
+  const token = process.env.MCP_TOKEN
+  if (!token) throw new Unauthorized()
+
+  const header = request.headers.get('authorization') ?? ''
+  const offered = header.startsWith('Bearer ') ? header.slice('Bearer '.length).trim() : ''
+  if (!offered || !secretsMatch(offered, token)) throw new Unauthorized()
+}
+
+/**
  * Turn whatever a handler threw into a response.
  *
  * The operator is also the developer, so a real message is more use to him than

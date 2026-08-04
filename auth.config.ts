@@ -40,6 +40,19 @@ export const authConfig = {
        */
       if (pathname.startsWith('/api/cron/')) return true
 
+      /*
+       * The MCP endpoint, on the same terms and for the same reason: an
+       * assistant calling a tool is a program, not a browser, and has no cookie
+       * to present. Its credential is `MCP_TOKEN`, checked by `requireMcpClient`
+       * in the route itself — which also refuses when the variable is unset,
+       * because the tools behind it spend money and write to the library.
+       *
+       * Exact, not a prefix that could widen: `=== '/api/mcp'` rather than
+       * `startsWith`, so nothing that happens to be filed under a longer path
+       * inherits the exemption.
+       */
+      if (pathname === '/api/mcp') return true
+
       // Everything else is the operator's own instrument.
       return signedIn
     },
