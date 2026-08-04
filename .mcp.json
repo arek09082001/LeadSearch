@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lead-engine": {
+      "type": "http",
+      "url": "${LEAD_ENGINE_URL:-https://lead-search-dun.vercel.app}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_TOKEN}"
+      }
+    }
+  }
+}

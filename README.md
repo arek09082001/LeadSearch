@@ -148,6 +148,44 @@ assistant can call. Generate one the same way as `CRON_SECRET`, then point a cli
 Unset, the route refuses everyone — including you. It is the only lock on the door, because
 an MCP client is a program and has no session to present.
 
+### Pointing a client at it
+
+`.mcp.json` in the repo root already describes the server, so any Claude Code session opened
+here picks it up. What it does **not** contain is the token — that is `${MCP_TOKEN}`, read
+from the environment at connect time:
+
+```json
+{
+  "mcpServers": {
+    "lead-engine": {
+      "type": "http",
+      "url": "${LEAD_ENGINE_URL:-https://lead-search-dun.vercel.app}/api/mcp",
+      "headers": { "Authorization": "Bearer ${MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+So the file is safe to commit and the same one variable serves both ends: the deployment
+checks it, the client presents it. Export it in your shell (or put it in `.env.local`, which
+is git-ignored) and confirm:
+
+```bash
+claude mcp list        # lead-engine ... ✔ Connected
+```
+
+Unset, it says `Missing environment variables: MCP_TOKEN` rather than failing quietly.
+`LEAD_ENGINE_URL` overrides the deployment for a preview or a local server; without it the
+default above is used.
+
+To add it outside this repo — a different project, or all of them — one command, with the
+token inline instead of from the environment:
+
+```bash
+claude mcp add --transport http lead-engine https://lead-search-dun.vercel.app/api/mcp \
+  --header "Authorization: Bearer <your token>" --scope user
+```
+
 ---
 
 ## The two tools
