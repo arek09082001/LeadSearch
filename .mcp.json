@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lead-engine": {
+      "type": "http",
+      "url": "${LEAD_ENGINE_URL:-http://localhost:3000}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MCP_TOKEN}"
+      }
+    }
+  }
+}

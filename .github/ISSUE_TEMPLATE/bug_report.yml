@@ -1,0 +1,70 @@
+name: Bug report
+description: Something doesn't work the way the docs say it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. **Security problems go through [SECURITY.md](https://github.com/arek09082001/LeadSearch/blob/master/SECURITY.md), not here.**
+
+        Please remove real business names, domains, phone numbers and API keys from anything you paste below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to Search
+        2. Search for "Zahnarzt" in "Heilbronn"
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Search
+        - Leads library
+        - Website audit / scoring
+        - Outreach / outcomes
+        - Map
+        - Call assistant / transcript
+        - MCP endpoint
+        - Setup / database migrations
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Where does it run?
+      options:
+        - Local (npm run dev)
+        - Local (npm run build && npm start)
+        - Vercel
+        - Other hosting
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: The commit you're running (`git rev-parse --short HEAD`).
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "22.x"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Server logs, browser console output or screenshots. Redacted, please.
+      render: text

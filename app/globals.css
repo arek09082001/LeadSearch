@@ -1,0 +1,272 @@
+@import "tailwindcss";
+
+/*
+  Lead Engine — dealing screen.
+
+  Ground is dark because of the scene, not the category: one operator, at a desk,
+  in hour-long sessions that run into the evening, reading ranked rows. A dark
+  field keeps a mostly-empty screen from glaring and lets three signal colours
+  do actual work.
+
+  Colour strategy: Restrained. Neutrals carry the surface; amber is the only
+  accent. Green and red are never decoration — they mean live and cold.
+*/
+
+@theme {
+  /* Ground and structure. Rules, not boxes. */
+  --color-ground: #0a0b0d;
+  --color-panel: #101215;
+  --color-raise: #171a1f;
+  --color-rule: #21252b;
+  --color-rule-strong: #2f353d;
+
+  /* Ink. Every value below is >= 4.5:1 on --color-ground. */
+  --color-ink: #e8ebee;
+  --color-ink-dim: #98a0aa;
+  --color-ink-faint: #7d8792;
+  /* Non-text only: dividers, disabled glyphs, hatching. Never sets type. */
+  --color-ink-ghost: #4a525b;
+
+  /* Signal. Meaning, never mood. */
+  --color-signal: #e0a340;
+  --color-live: #4cc38a;
+  --color-alert: #ef5f5f;
+
+  --font-ui: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-data: var(--font-jetbrains), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Dense scale. The tenth minute of a session, not the first impression. */
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 0.875rem;
+  --text-label: 0.6875rem;
+  --text-label--line-height: 1rem;
+  --text-sm: 0.75rem;
+  --text-sm--line-height: 1.0625rem;
+  --text-base: 0.8125rem;
+  --text-base--line-height: 1.25rem;
+  --text-lg: 0.9375rem;
+  --text-lg--line-height: 1.375rem;
+  --text-xl: 1.1875rem;
+  --text-xl--line-height: 1.5rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 1.75rem;
+
+  /* Nothing in this world is rounded. */
+  --radius-none: 0px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-rule);
+  }
+
+  html {
+    background-color: var(--color-ground);
+    /* Scrollbars, form controls and caret follow the world instead of the OS. */
+    color-scheme: dark;
+    /* The operator asked for small type. Never let a browser hint it smaller. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-ground);
+    color: var(--color-ink);
+    font-family: var(--font-ui);
+    font-size: var(--text-base);
+    line-height: var(--text-base--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Terminal figures must line up in a column, always. */
+  .font-data,
+  [class*="font-data"] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "zero" 1;
+  }
+
+  /* One visible focus treatment, everywhere, keyboard-first by design. */
+  :focus-visible {
+    outline: 1px solid var(--color-signal);
+    outline-offset: 1px;
+  }
+
+  /* Dense surfaces will scroll a lot. The bar is part of the instrument. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-rule-strong) transparent;
+  }
+
+  ::selection {
+    background-color: var(--color-signal);
+    color: var(--color-ground);
+  }
+
+  ::placeholder {
+    color: var(--color-ink-faint);
+  }
+}
+
+/*
+  MapLibre's own chrome, brought into the world.
+
+  The library ships a stylesheet the canvas genuinely needs — positioning, touch
+  handling, the container's overflow — and, bundled with it, an attribution
+  control that is a white rounded pill with a shadow on it. Three things this
+  system does not have. The control itself stays, because the tiles are licensed
+  on the condition that their credit is displayed and rendering it from the
+  source's own TileJSON is what keeps that credit true; only its clothes change.
+
+  Written flat rather than in @layer components so it beats the library's own
+  rules without an !important anywhere.
+*/
+.maplibregl-map {
+  font-family: var(--font-ui);
+}
+
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl,
+.maplibregl-ctrl-bottom-left .maplibregl-ctrl {
+  margin: 0;
+}
+
+.maplibregl-ctrl-attrib {
+  background-color: color-mix(in oklab, var(--color-ground) 88%, transparent);
+  color: var(--color-ink-faint);
+  font-family: var(--font-data);
+  font-size: var(--text-micro);
+  line-height: 1rem;
+  padding: 1px 6px;
+  border-top: 1px solid var(--color-rule);
+  border-left: 1px solid var(--color-rule);
+  border-radius: var(--radius-none);
+  box-shadow: none;
+}
+
+.maplibregl-ctrl-attrib a {
+  color: var(--color-ink-faint);
+  text-decoration: none;
+}
+
+.maplibregl-ctrl-attrib a:hover {
+  color: var(--color-ink-dim);
+  text-decoration: underline;
+}
+
+@utility label {
+  font-family: var(--font-ui);
+  font-size: var(--text-label);
+  line-height: var(--text-label--line-height);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  /* Deliberately sets no colour: callers own it, so the utility never fights
+     an inherited or active-state colour on specificity. */
+}
+
+/*
+  The one authored moment: a new row arrives on the feed the way a quote ticks.
+  A brief ground flash that settles, not a slide-in. Already-visible default.
+*/
+@keyframes tick-in {
+  from {
+    background-color: color-mix(in oklab, var(--color-signal) 18%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+
+@utility tick {
+  animation: tick-in 900ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/*
+  Printing.
+
+  Exactly one thing in this product is ever printed: the call briefing, carried
+  to a desk with a phone on it. So the print stylesheet does not try to make the
+  dealing screen work on paper — there is no dealing screen on paper. It prints
+  the briefing alone, on white.
+
+  Two mechanisms, both deliberately blunt:
+
+  1. `visibility` rather than `display` to hide the rest of the page. Setting
+     `display: none` on ancestors would take the briefing down with them, and
+     hiding every sibling by hand is a rule that breaks the next time the page
+     grows a band. Everything is hidden, the print region and its children are
+     shown again, and the region is lifted to the top-left of the sheet.
+
+  2. The theme's own custom properties are re-declared on the region. Tailwind
+     emits `.text-ink` as `color: var(--color-ink)`, so overriding the variables
+     inside the region re-colours every utility inside it at once, with no
+     `print:` variant on a single element and no second set of classes to keep
+     in step. Amber goes to black rather than to a lighter grey: on paper the
+     accent has no field to sit on and no work left to do, and the ordering it
+     encoded is already carried by the numbers beside the hooks.
+*/
+@media print {
+  html,
+  body {
+    background: #fff;
+    color-scheme: light;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  [data-print-region],
+  [data-print-region] * {
+    visibility: visible;
+  }
+
+  [data-print-region] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    border: 0;
+
+    --color-ground: #fff;
+    --color-panel: #fff;
+    --color-raise: #fff;
+    --color-rule: #d4d4d4;
+    --color-rule-strong: #a3a3a3;
+    --color-ink: #000;
+    --color-ink-dim: #262626;
+    --color-ink-faint: #525252;
+    --color-ink-ghost: #737373;
+    /* The accent stops meaning anything on paper. */
+    --color-signal: #000;
+  }
+
+  @page {
+    margin: 14mm;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  /*
+    The tick is the one animation here with meaning in it rather than polish,
+    and it is deliberately left to die under this rule.
+
+    A reduced-motion alternative is supposed to keep the state change and drop
+    the movement. This one has no motionless form. `tick` fires on mount for
+    every row, so what it encodes is not "this row is special" but "this row
+    arrived just now" — a fact about time, not about the row. Any static mark
+    would still be on all sixty rows an hour later, which says something false
+    rather than something quieter.
+
+    What the flash contributes is carried in words elsewhere: the status strip
+    counts up as pages land and says "fetched just now", and the feed marks
+    "Fetching next page…" while another is in flight. Under reduced motion
+    those are the whole signal, and they are legible without it.
+  */
+}

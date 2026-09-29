@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, typecheck, build and demos
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: schema.sql matches the migrations
+        run: |
+          node scripts/build-schema.mjs
+          git diff --exit-code supabase/schema.sql || {
+            echo "::error::supabase/schema.sql is out of date. Run 'node scripts/build-schema.mjs' and commit the result."
+            exit 1
+          }
+
+      # Offline: no keys, no database, no network. Two of them assert their results.
+      - name: Demo — live tips
+        run: node scripts/tips-demo.mjs
+      - name: Demo — transcript
+        run: node scripts/transcript-demo.mjs
+      - name: Demo — assistant
+        run: node scripts/assistant-demo.mjs
+
+      # Needs no environment variables, so it runs without any secrets.
+      - name: Build
+        run: npm run build
