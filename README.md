@@ -1,6 +1,7 @@
 # Lead Engine
 
 [![CI](https://github.com/arek09082001/LeadSearch/actions/workflows/ci.yml/badge.svg)](https://github.com/arek09082001/LeadSearch/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 Find local businesses whose web presence is weak or missing, judge quickly which are worth
 approaching, and keep that judgement alive across weeks.
@@ -486,3 +487,17 @@ including in fixtures. Everyone taking part is expected to follow the
 
 Found a security problem? Please don't open a public issue. [SECURITY.md](SECURITY.md) says how
 to report it privately.
+
+---
+
+## License
+
+Copyright (C) 2026 arek09082001
+
+Lead Engine is free software, licensed under the
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+
+In short: you may use, study, change and run it, commercially too, for example to find
+clients for your own business. If you distribute a modified version, or let other people use
+a modified version over a network, you must make your source code available to them under
+the same license. The [full text](LICENSE) is what counts.
