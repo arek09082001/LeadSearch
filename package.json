@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Find local businesses with a weak or missing web presence, audit them, and keep the prospects alive across weeks.",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/arek09082001/LeadSearch.git"
